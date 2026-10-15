@@ -63,6 +63,7 @@ fn run(root: &Path, args: &[&str]) -> (i32, String, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
         .args(args)
         .args(["--root", root.to_str().unwrap()])
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .output()
         .unwrap();
     (
@@ -342,6 +343,46 @@ fn daily_counts_per_local_day() {
     assert_eq!(j["days"].as_array().unwrap().len(), 2);
     let j = json_of(d.path(), &["daily", "poll=until", "--in", "result"]);
     assert_eq!(j["total"], json!({"poll": 0}));
+}
+
+#[test]
+fn the_running_session_is_left_out_unless_asked() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("-p");
+    let same = "Exit code 1\nError: same";
+    write_log(
+        &p.join("self-1234.jsonl"),
+        &[bash("2026-10-05T01:00:00Z", "npm test", same)],
+    );
+    write_log(
+        &p.join("self-1234/subagents/agent-a1.jsonl"),
+        &[bash("2026-10-05T01:01:00Z", "npm test", same)],
+    );
+    write_log(
+        &p.join("other.jsonl"),
+        &[bash("2026-10-05T01:02:00Z", "npm test", same)],
+    );
+    let calls = |extra: &[&str]| {
+        let mut args = vec![
+            "repeats",
+            "--json",
+            "--since",
+            "2026-10-01T00:00Z",
+            "--until",
+            "2026-10-20T00:00Z",
+            "--root",
+            d.path().to_str().unwrap(),
+        ];
+        args.extend(extra);
+        let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+            .args(&args)
+            .env("CLAUDE_CODE_SESSION_ID", "self-1234")
+            .output()
+            .unwrap();
+        serde_json::from_slice::<Value>(&o.stdout).unwrap()["calls"].clone()
+    };
+    assert_eq!(calls(&[]), 1);
+    assert_eq!(calls(&["--include-self"]), 3);
 }
 
 #[test]

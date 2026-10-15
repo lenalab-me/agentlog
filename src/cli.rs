@@ -61,6 +61,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     let mut tool_filter: Option<String> = None;
     let mut field = Field::Any;
     let mut failed_only = false;
+    let mut include_self = false;
     let (mut uses, mut fail, mut alt, mut escape, mut ignore) = (None, None, None, None, None);
     let mut alt_tools: Option<Vec<String>> = None;
     let mut escape_tools: Option<Vec<String>> = None;
@@ -111,6 +112,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             }
             "--project" => common.projects.push(value(&mut it)?),
             "--exclude" => common.excludes.push(value(&mut it)?),
+            "--include-self" => include_self = true,
             "--root" => common.root = PathBuf::from(value(&mut it)?),
             "--top" => top = number("--top", &value(&mut it)?)?,
             "--examples" => examples = number("--examples", &value(&mut it)?)?,
@@ -138,6 +140,14 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             }
             _ => pos.push(a),
         }
+    }
+    // Run from a Claude Code session, leave that session out: its own calls (this
+    // analysis) are not what is being measured.
+    if !include_self
+        && let Ok(id) = std::env::var("CLAUDE_CODE_SESSION_ID")
+        && !id.is_empty()
+    {
+        common.excludes.push(id);
     }
     if common.since >= common.until {
         return Err("--since must be before --until".into());
