@@ -1,0 +1,51 @@
+agentlog - find what coding agents keep getting wrong, from Claude Code session logs
+
+Usage:
+  agentlog repeats [--tool T] [--top 30] [--all] [-v | --examples N]
+  agentlog tool NAME [--uses RE] [--fail RE] [--alt RE] [--alt-tool T,T]
+                     [--escape RE] [--escape-tool T,T] [--ignore RE] [-v]
+  agentlog daily NAME=REGEX... [--in input|result|any] [--tool T] [--failed]
+Every command takes:
+  --since WHEN (default 14d)  --until WHEN  --project S  --exclude S  --root DIR  --json
+  WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
+
+Examples:
+  agentlog repeats --since 2026-10-01               same failure in two or more places
+  agentlog repeats --tool Bash -v                   with the commands (may hold secrets)
+  agentlog tool rpatch --since 2026-10-06T23:57Z    did it fix itself, or go another way?
+  agentlog tool devsrv --since 2026-10-01           other ways per day, before and after
+  agentlog tool mcp__aws-knowledge__aws___search_documentation
+  agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
+
+What it counts:
+  Each session file and each subagent file is one context (a subagent starts empty, so
+  the same mistake there counts again). The window applies to each call's own time, so
+  a resumed old session does not bring its old calls in.
+
+  repeats: failed calls grouped by signature: the tool, for Bash the program, and the
+  first error line with paths, ids and numbers flattened (a call refused before it ran,
+  by the harness or a hook, has no program). Calls the user refused or stopped are left
+  out. Sorted by rep (contexts that had it twice or more), then ctx (contexts that had
+  it). streak is the longest run of it on one tool with no passing call of that tool
+  between. A failure seen once is left out (--all shows it).
+
+  tool: one failure fixed on the next call is fine. It reports runs of failures and
+  what came after each run: the tool again (fixed), another way of doing the job (went
+  another way), or the end of the context. Calls of neither kind between are skipped.
+  Presets: rpatch (other ways: Edit, python replace, sd, sed -i, perl -i; right after a
+  failure also Write, cat >, >|) and devsrv (other ways: lsof -i, pkill, nohup, kill,
+  `server &`, until-curl loops). Any other NAME is a tool name (Edit, an MCP tool), or
+  a Bash program with --uses; the options below replace the preset's.
+  --fail RE: the tool itself failed (the result matches), not a command after it.
+  --alt RE / --alt-tool: another way, counted per day and as going another way.
+  --escape RE / --escape-tool: counted only as going another way right after a
+  failure (Write makes new files all day; rewriting the failed file is an escape).
+  --ignore RE: an --alt/--escape match that does not count (writing under /tmp).
+  --since the day the tool arrived: before it, the other ways are not escapes.
+
+  daily: calls per local day whose input (the Bash command, the file path, or the tool
+  input) or result matches each REGEX.
+
+Output: text tables; --json prints one JSON object instead. Commands appear only with
+-v/--examples, since they can hold credentials.
+Exit status: 0 ok; 2 invalid input; 3 the log directory cannot be read.
