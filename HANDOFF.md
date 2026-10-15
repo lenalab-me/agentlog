@@ -2,6 +2,8 @@
 
 新しいセッションは、この文書から始める。2026-10-15 に、10 月のログから次に作る道具を探すセッション（`~/.t3/scratch/2026-10-15-claude-efd99aa3`）で作った。
 
+測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
+
 ## 今どこまでできたか（2026-10-15）
 
 - **動くもの.** `repeats` / `tool` / `daily` の 3 つ。`cargo install --locked --path .` で `~/.cargo/bin/agentlog`（0.1.0）に入れた。数え方は `docs/design.md`、使いどころは `docs/recipes.md`。
