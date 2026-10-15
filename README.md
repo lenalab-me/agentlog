@@ -10,7 +10,11 @@ agentlog tool devsrv --since 2026-10-01             # 使い始める前と後�
 agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
 ```
 
-使い方の全体は `agentlog --help`。
+使い方の全体は `agentlog --help`。Claude Code の中から呼ぶと、そのセッション自身は数えない（`--include-self` で入れる）。
+
+- [設計](docs/design.md): 文脈と呼び出し、失敗、シグネチャ、`repeats` と `tool` の数え方、プリセット、未決と危険
+- [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る
+- [引き継ぎ](HANDOFF.md): 今どこまでできたか、10 月の結論、次にやること
 
 ## 数え方の決まり
 
