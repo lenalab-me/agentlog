@@ -256,12 +256,13 @@ impl World {
             let args: Vec<&str> = q.iter().map(String::as_str).collect();
             let cached = self.ask(false, &args);
             let raw = self.ask(true, &args);
-            assert_eq!(
-                cached,
-                raw,
-                "{when}: `{}` with the cache is not what the logs say",
-                q.join(" ")
-            );
+            if cached != raw {
+                panic!(
+                    "{when}: `{}` with the cache is not what the logs say\n{}",
+                    q.join(" "),
+                    first_difference(&cached, &raw)
+                );
+            }
         }
     }
 
@@ -297,6 +298,27 @@ impl World {
         out.sort();
         out
     }
+}
+
+/// Where two answers first part, short enough to read.
+fn first_difference(cached: &Out, raw: &Out) -> String {
+    let cut = |s: Option<&str>| match s {
+        None => "(no line)".to_string(),
+        Some(s) => s.chars().take(160).collect(),
+    };
+    if cached.0 != raw.0 {
+        return format!("exit status: cache {}, logs {}\n{}", cached.0, raw.0, raw.2);
+    }
+    let (a, b): (Vec<&str>, Vec<&str>) = (cached.1.lines().collect(), raw.1.lines().collect());
+    let i = (0..a.len().max(b.len()))
+        .find(|&i| a.get(i) != b.get(i))
+        .unwrap_or(0);
+    format!(
+        "line {}:\n  cache: {}\n  logs:  {}",
+        i + 1,
+        cut(a.get(i).copied()),
+        cut(b.get(i).copied())
+    )
 }
 
 fn append(path: &Path, text: &str) {
