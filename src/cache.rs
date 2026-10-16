@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::fs::{FileExt, MetadataExt};
+use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -85,7 +85,12 @@ impl Cache {
             "{kind}-{:016x}",
             fnv(root.to_string_lossy().as_bytes())
         ));
-        fs::create_dir_all(&dir).ok()?;
+        // What was said is in here: for the user alone.
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .ok()?;
         Some(Slot { dir })
     }
 }
@@ -110,7 +115,15 @@ impl Slot {
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.extension().is_some_and(|x| x == "jsonl") && !keep.contains(&p) {
+            let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
+            // A `.tmpPID` is a cache being written; one left from a run that died is old.
+            let left_over = ext.starts_with("tmp")
+                && e.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age.as_secs() > 3600);
+            if (ext == "jsonl" && !keep.contains(&p)) || left_over {
                 let _ = fs::remove_file(&p);
             }
         }
@@ -306,7 +319,12 @@ fn store(file: &Path, log: &Path, st: &Stat, pos: u64, ex: &Extract) -> io::Resu
     // once leave one whole file.
     let tmp = file.with_extension(format!("tmp{}", std::process::id()));
     {
-        let mut f = fs::File::create(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
         f.write_all(out.as_bytes())?;
     }
     fs::rename(&tmp, file).inspect_err(|_| {
