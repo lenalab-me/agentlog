@@ -16,6 +16,9 @@ Every command takes:
   WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
 search, show and timeline also read Codex's logs: --source claude|codex|all (search, timeline:
   claude; show: all) and --codex-root DIR (repeat it; default ~/.codex/sessions and archived_sessions).
+search, show and timeline keep what they take from the logs in ~/.cache/agentlog ($XDG_CACHE_HOME),
+  so a later run reads only what was added. --raw reads the logs themselves instead (slow, certain:
+  use it when the cache looks wrong, or the log format has just changed). Deleting the folder is safe.
 
 Examples:
   agentlog repeats --since 2026-10-01               same failure in two or more places
@@ -27,6 +30,7 @@ Examples:
   agentlog search 'Planconfig' --source codex       only Codex's logs
   agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
   agentlog timeline --repo ~/project/prod/x --since 2026-10-01   what was said and committed
+  agentlog search 'Planconfig' --raw                the same without the cache (to check it)
 
 Output: text tables; --json prints one JSON object instead (search, timeline: one object per
 hit, one per line). Commands appear only with -v/--examples, since they can hold credentials;
@@ -71,6 +75,16 @@ Codex logs (search, show and timeline; repeats, tool and daily read Claude Code'
   subagent notices). Prompts in a subagent's session are task. Reasoning is left out.
   A forked subagent's file begins with copies of its parent's lines; they are skipped.
   Lines that cannot be messages are not parsed: all 26 GB takes about 5 s.
+
+Cache (search, show, timeline): one file per log under ~/.cache/agentlog/<claude|codex>-<hash of
+  the root>/, with the talk, a one-line note per tool call, the working directories of the
+  lines, and how far the log was read. A log that grew is read from there; one that shrank or was
+  replaced (another inode, or not beginning as it did) is read again whole. A last line without
+  its newline is still being written: --raw and the cache both leave it for the next run. The
+  caches of logs that are gone are removed. Where nothing can be written, the logs are read.
+  A build that reads logs differently finds the old caches stale (the build hashes the sources
+  that read them) and makes them again. Only you can read the folder (0700, files 0600).
+  The window, --project, --exclude and the running-session rule apply after the cache.
 
 What it counts (repeats, tool, daily):
   Each session file and each subagent file is one context (a subagent starts empty, so

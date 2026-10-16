@@ -4,6 +4,18 @@
 
 測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
 
+## 控え（キャッシュ）：search・show・timeline をログが増えても速く（2026-10-17、ブランチ `speed`。main への取り込みと `cargo install` はまだ）
+
+`search`・`show`・`timeline` が、ログのファイルごとに読み取った結果を `~/.cache/agentlog/`（`$XDG_CACHE_HOME`）に置き、追記された分だけを読み足す。`--raw` は控えを使わずログを直接読む。仕様は `docs/design.md` の「控え」、確かめ方は `docs/recipes.md` の 4「控えが怪しいとき」、`src/help.txt` の `Cache` の節。方針は `harness-engineering/backlog.md`（DB・全文索引は持たない。控えは作り直せる写し）。
+
+- **並列は元からあった.** 読みのスレッド分け（`load::read_all`）は `search`・`show`・`timeline` が使っていて、`available_parallelism()` の数。作業の前提（1 本のスレッド）は main では違っていた。Codex の 26 GB は読むこと自体が支配的で、スレッドを 4 倍にしても 5.2 s → 4.9 s。そこで並列はそのまま。
+- **速さ（表は `docs/design.md`）.** 2 回目以降：Claude 45〜85 ms（以前 0.55〜1.0 s）、Codex の写し 66〜121 ms（以前 3.6〜5.1 s）。1 回目（控えを作る）は Claude 約 1 秒、Codex 6〜8 秒。控えは Claude 18 MB（ログの 1.3%）、Codex 46 MB（0.18%）。
+- **作り.** `lines.rs`（位置から行を読む。改行のない最後の行は渡さない）、`cache.rs`（見出し・発言の行・作業ディレクトリの行、`fetch`）、`build.rs`（読み方のソースのハッシュ）。`talk::read_lines` / `codex::read_lines` が、ログから取り出す規則の唯一の場所で、`--raw` も控えもこれを通る。
+- **版の上げ忘れの防ぎ方.** 控えの見出しの `format`（作りを変えたとき人が上げる）と `reader`（`build.rs` が `src/*.rs` のうち出力・集計だけのファイルを除いた中身をハッシュにしたもの）。読み方のコードを変えると自動で古い控えが使われなくなる。ログ側の形が変わったときは見えないので、`--raw` との `diff` と控えの削除（recipes）。
+- **読み方を揃えて変わったこと.** 改行のない最後の行は読まない（`--raw` も）。セッションの `cwd` と `sessionId` は言葉のある行だけから決める（以前は `show` だけツール呼び出しの行も使った）。Claude の行はバイト列で読み、UTF-8 でない行はその行だけ飛ばす。
+- **確かめ.** 結合テスト 8 件（`tests/cache.rs`。手で書いた架空のログで、控えと `--raw` が同じ答えを出すことを、初回・2 回目・追記・途中で切れた行・小さくなった・書き換わった・別の inode・消えた・touch・壊れた控え・別の読み方の控え・書けない置き場所で確かめる）。わざと壊して落ちた：(1) 改行のない最後の行を読んだことにする→`a_line_still_being_written…`、(2) 追記を読んだあと最後の発言を落とす→4 件、(3) 小さくなったログの読み直しをやめる→`a_log_that_became_smaller…`（`the log shrank`）、(4) 指紋の比較だけやめる→同じテスト（`the middle changed and the file grew`）、(5) 控えに assistant の本文を書かない→6 件（`start: search … with the cache is not what the logs say`）、(6) 作業ディレクトリを書かない→6 件（timeline）。本物のログでは、Claude と Codex の写しで `search` 36 通り（語・`-i`・`--who`・窓）、`timeline` 12 通り（4 つのリポジトリ、`--source` 2 通り）、`show` 6 つ（サブエージェント、Codex 含む）が、控え・`--raw`・変更前のバイナリで一致（実行中のセッションの追記分も一致）。
+- **残した課題.** 追記時の指紋の読み出し（8 KB）と控えの書き直しは毎回（実行中のセッションの控えは数百 KB まで）。古い版の控えは、そのログが読まれるまで残る。Codex の `timeline` の 1 回目は未測定。`cargo install` はまだ。`~/.claude/CLAUDE.md` の案内（`--raw`）はまだ。
+
 ## timeline：発言とコミットを時刻順に並べる（2026-10-17、ブランチ `timeline`。main への取り込みと `cargo install` はまだ）
 
 `agentlog timeline --repo DIR [--project S] [--since WHEN] [--until WHEN] [--who user|any] [--source …] [--json]`。`git -C DIR log` のコミットと、セッションの発言を時刻順に混ぜて出す。振り返り・引き継ぎ・決定の記録を書くとき、`git log` と記憶を手で突き合わせていたのを置き換える（`harness-engineering/backlog.md` の候補）。仕様は `docs/design.md` の「timeline」、使い方は `docs/recipes.md` の 5、`src/help.txt` の `timeline:` の節。

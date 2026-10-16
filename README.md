@@ -13,11 +13,14 @@ agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時
 agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は search が claude、show が all）
 agentlog timeline --repo ~/project/prod/x --since 2026-10-01 --until 2026-10-03   # 発言とコミットを時刻順に（振り返り・引き継ぎ）
 # 別の場所に写したログは、--root（Claude）と --codex-root（Codex。sessions と archived_sessions の2か所）で渡す
+agentlog search 'Planconfig' --raw                  # 控え（~/.cache/agentlog）を使わず、ログを直接読む（遅いが確実。控えが怪しいときの突き合わせ）
 ```
 
 使い方の全体は `agentlog --help`。Claude Code の中から呼ぶと、そのセッション自身は数えない（`--include-self` で入れる）。
 
-- [設計](docs/design.md): 文脈と呼び出し、失敗、シグネチャ、`repeats` と `tool` の数え方、プリセット、未決と危険
+`search`・`show`・`timeline` は、ログから読み取った会話の本文を `~/.cache/agentlog/`（`$XDG_CACHE_HOME`）に控えとして置く。ログが増えても、2 回目からは増えた分だけを読むので、全ログ（Claude 1.3 GB、Codex の写し 26 GB）でも 0.1 秒前後。控えは元のログから作り直せる写しで、消しても次の 1 回が遅くなるだけ。`--raw` で控えを使わずにログを直接読める（遅いが確実）。仕組みは `docs/design.md` の「控え」、怪しいときの確かめ方は `docs/recipes.md` の 4。
+
+- [設計](docs/design.md): 文脈と呼び出し、失敗、シグネチャ、`repeats` と `tool` の数え方、プリセット、`search`・`show`・`timeline` の控え（キャッシュ）、未決と危険
 - [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る、振り返りで会話を探す、会話とコミットを並べて引き継ぎを書く
 - [引き継ぎ](HANDOFF.md): 今どこまでできたか、10 月の結論、次にやること
 
