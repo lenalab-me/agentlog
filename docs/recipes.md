@@ -93,8 +93,26 @@ agentlog show 1a2b3c4d --grep '切り分けすぎ' --around 5        # 時刻の
 - 再開したセッションは、前の会話が写されて同じ発言が2つ出ることがある。時刻と中身が同じなら同じもの。
 - 引用するときは、本物の発言の写しを文書やコミットに残さない（`harness-engineering` の決まり）。件数と、自分の言葉での要約にする。
 
+### Codex の会話も探す
+
+`search` と `show` は、既定で Claude Code と Codex の両方を読む（一覧の `claude` / `codex` の列で見分ける）。片方だけなら `--source claude` / `--source codex`。使い方は同じだが、次の点がちがう。
+
+```sh
+agentlog search 'デプロイ|deploy' -i --source codex --since 2026-09-01   # Codex のログだけ
+agentlog show 3c4d5e6f --grep 'デプロイ'                                  # Codex の id は末尾 8 文字
+# 別の場所に写してあるログ（sessions と archived_sessions の2か所を渡す。Claude 側は --root）
+agentlog search 'デプロイ' --source codex \
+  --codex-root ~/.local/share/agent-log-archive/codex/sessions \
+  --codex-root ~/.local/share/agent-log-archive/codex/archived_sessions
+```
+
+- **id は末尾 8 文字.** Codex の id は先頭が時刻なので、同じ時期のセッションは先頭が同じ。`show` は id の**どの部分でも**受け付ける。複数に当たれば候補（`id  source  時刻  プロジェクト`）が出る。
+- **写しは両方の置き場所を渡す.** 片方だけだと、アーカイブ済みのセッションか、まだアーカイブされていないセッションが抜ける。本物と写しの両方を渡しても、同じ id のセッションは 1 つだけ読む（大きいほう）。
+- **`--project` は作業ディレクトリ名.** Codex にはフォルダ名がなく、セッションの `cwd` から作った名前（`net/designer` など）に含まれるかで選ぶ。
+- **全期間でも 5 秒ほど.** 全ログ（26 GB）の `search` は、ファイルがキャッシュに載っていれば 5 秒ほど。`--since` で更新時刻が窓より前のファイルは開かないので、`--since 2026-09-01` なら約 2 秒、直近 1 週間なら 0.03 秒。式に決まった文字列がまったくない（`\d+` だけなど）ときも、ほとんど変わらない。ディスクから初めて読むときは、ディスクの速さで決まる。
+- **Codex の `user` は、アプリが足した文を除いてある.** 添付の一覧、ブラウザの状態、AGENTS.md、サブエージェントの通知など。見分け方は `docs/design.md` の「Codex のログ」。サブエージェントのセッションの依頼は `task`。
+
 ## 5. 数字を人に渡すとき
-## 4. 数字を人に渡すとき
 
 - 窓（`--since` / `--until`）と、外したセッションを書く。
 - `rep`・`ctx`・`total` のどれを言っているかを書く。`total` は 1 つの文脈の連打で膨らむ。

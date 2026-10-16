@@ -59,7 +59,7 @@ pub struct Parsed {
     pub common: Common,
 }
 
-const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json]  (agentlog --help)";
+const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
 
 fn regex(flag: &str, s: &str) -> Result<Regex, String> {
     Regex::new(s).map_err(|e| format!("{flag}: not a regex: {e}"))

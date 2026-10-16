@@ -1,6 +1,6 @@
 # agentlog
 
-Claude Code のセッションログ（`~/.claude/projects/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`）もできる。
+Claude Code のセッションログ（`~/.claude/projects/`）と Codex のセッションログ（`~/.codex/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`。Claude Code と Codex の両方）もできる。数える `repeats`・`tool`・`daily` は Claude Code だけ。
 
 ```sh
 cargo install --locked --path .
@@ -10,6 +10,8 @@ agentlog tool devsrv --since 2026-10-01             # 使い始める前と後�
 agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
 agentlog search 'too loose' -i --who user           # 前に何と言ったか（古い順。窓は既定で制限なし）
 agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時刻で、その前後の会話を読む
+agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は all）
+# 別の場所に写したログは、--root（Claude）と --codex-root（Codex。sessions と archived_sessions の2か所）で渡す
 ```
 
 使い方の全体は `agentlog --help`。Claude Code の中から呼ぶと、そのセッション自身は数えない（`--include-self` で入れる）。
