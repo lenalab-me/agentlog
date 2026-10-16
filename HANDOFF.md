@@ -4,6 +4,15 @@
 
 測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
 
+## timeline：発言とコミットを時刻順に並べる（2026-10-17、ブランチ `timeline`。main への取り込みと `cargo install` はまだ）
+
+`agentlog timeline --repo DIR [--project S] [--since WHEN] [--until WHEN] [--who user|any] [--source …] [--json]`。`git -C DIR log` のコミットと、セッションの発言を時刻順に混ぜて出す。振り返り・引き継ぎ・決定の記録を書くとき、`git log` と記憶を手で突き合わせていたのを置き換える（`harness-engineering/backlog.md` の候補）。仕様は `docs/design.md` の「timeline」、使い方は `docs/recipes.md` の 5、`src/help.txt` の `timeline:` の節。
+
+- **決めたこと.** コミットは全ローカル・追跡ブランチ（`--branches --remotes`）、マージコミットは外し、**作者時刻**で置く（rebase で動かない。コミット時刻だと、作業ツリーで作ったコミットが取り込んだ時刻にまとまり、会話の順が崩れる）。発言は `search` と同じ見分け（既定 `--who user`、`--source` は claude）。`--project` を省くと、セッションの行ごとの作業ディレクトリ（`cwd`）が、リポジトリ・`git worktree list` の作業ツリー・`~/.t3/worktrees/<リポジトリ名>/` の中に半分以上あるものを拾う。リポジトリより上のフォルダ（親のフォルダで開いたセッション）の行は、どちらにも数えない。判断は窓の中の行だけ。`Session` に `cwds`（`cwd` ごとの行数）を足した。
+- **速さ.** 全ログ（Claude 1.3 GB）で既定の窓も 2026-01-01 からも 0.5 秒ほど。`search` と同じ。
+- **確かめ.** 単体 5 件、結合 3 件（手で書いたログと、テストの中で `git init` して作った小さなリポジトリ。発言・件名は架空）。わざと壊して落ちるのを確かめた：並べ替えをやめる（発言が前、コミットが後ろにまとまる）、`cwd` を見ずに全セッションを入れる、作者時刻をコミット時刻にする、親のフォルダの行を外側に数える、T3 の作業ツリーの場所を足さない、マージコミットを入れる、id を毎行出す。
+- **残した課題.** 同じ名前の別のリポジトリの T3 作業ツリー（`~/.t3/worktrees/<同じ名前>/`）は混ざる。別の道具の作業ツリー（Orca の `~/orca/workspaces/…`、Codex の `~/.codex/worktrees/…`）は、`git worktree list` に残っていれば拾うが、消えたものは拾えない。再開したセッションの複製（約 2%）は同じ発言が 2 回出る。日をまたぐ長いセッションは、窓の中の行の合計で 1 つに決めるので、別のリポジトリで作業した日の発言が入りうる（窓をその日以外に絞れば外れる）。リポジトリの外で、そのリポジトリの話をした会話は拾わない（`--project` か `search`）。`--limit` はない（窓で絞る）。
+
 ## search と show で Codex のログも読む（2026-10-17、main に取り込み、`cargo install` 済み）
 
 `search`・`show` が Claude Code と Codex の両方を読む。`--source claude|codex|all`（既定は search が claude、show が all。`--codex-root` を渡した search は all）、`--codex-root DIR`（何度でも。既定は `~/.codex/sessions` と `~/.codex/archived_sessions`）。出力の行と `show` の見出しに `claude` / `codex` の印、JSON に `source`。`repeats`・`tool`・`daily` は Claude だけのまま。仕様は `docs/design.md` の「Codex のログ」、使い方は `docs/recipes.md` の 4、`src/help.txt` の最後の節。
