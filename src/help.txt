@@ -13,7 +13,7 @@ Every command takes:
   --include-self (run inside Claude Code, the running session is left out by default)
   --since defaults to 14d, but to no limit for search and show (look back as far as needed).
   WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
-search and show also read Codex's logs: --source claude|codex|all (default all) and
+search and show also read Codex's logs: --source claude|codex|all (search: claude, show: all) and
   --codex-root DIR (repeat it; default ~/.codex/sessions and ~/.codex/archived_sessions).
 
 Examples:

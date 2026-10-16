@@ -272,6 +272,11 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--source and --codex-root are for search and show; {sub} reads Claude Code's logs only"
         ));
     }
+    // Codex's logs are 20 times Claude's (5 s against 0.4 s to read them all) and no longer
+    // grow, so search reads them when asked. show finds a Codex id by its file name, cheaply.
+    if sub == "search" && !source_given && !common.codex_roots_given {
+        common.source = SourceSel::Claude;
+    }
     if !common.codex_roots_given {
         common.codex_roots = codex::default_roots()
             .into_iter()

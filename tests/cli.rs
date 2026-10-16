@@ -1232,3 +1232,41 @@ fn codex_files_are_chosen_by_the_window() {
         0
     );
 }
+
+/// Codex's logs under HOME are left out of search unless asked for; show still finds them.
+#[test]
+fn search_reads_codex_only_when_asked_and_show_finds_it_anyway() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let claude = d.path().join("claude");
+    fs::create_dir_all(&claude).unwrap();
+    let codex = home.join(".codex");
+    fs::create_dir_all(codex.join("sessions/2026/10/02")).unwrap();
+    let t = |s: u32| format!("2026-10-02T05:{s:02}:00.123Z");
+    write_raw(
+        &cx_file(&codex, CX_DAY, CX_LOCAL, CX1),
+        &[
+            cx_meta(CX1, &t(0), CX_CWD, ""),
+            cx_msg(1, &t(1), "user", &["ZEBRA from codex"]),
+        ],
+    );
+    let run_home = |args: &[&str]| {
+        let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+            .args(args)
+            .args(["--root", claude.to_str().unwrap()])
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&o.stdout).into_owned();
+        (o.status.code().unwrap_or(-1), out)
+    };
+    let (code, out) = run_home(&["search", "ZEBRA"]);
+    assert_eq!(code, 0);
+    assert!(!out.contains("ZEBRA from codex"), "{out}");
+    let (_, out) = run_home(&["search", "ZEBRA", "--source", "all"]);
+    assert!(out.contains("ZEBRA from codex"), "{out}");
+    let (code, out) = run_home(&["show", &CX1[CX1.len() - 8..]]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("ZEBRA from codex"), "{out}");
+}

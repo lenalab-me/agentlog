@@ -10,7 +10,7 @@ agentlog tool devsrv --since 2026-10-01             # 使い始める前と後�
 agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
 agentlog search 'too loose' -i --who user           # 前に何と言ったか（古い順。窓は既定で制限なし）
 agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時刻で、その前後の会話を読む
-agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は all）
+agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は search が claude、show が all）
 # 別の場所に写したログは、--root（Claude）と --codex-root（Codex。sessions と archived_sessions の2か所）で渡す
 ```
 

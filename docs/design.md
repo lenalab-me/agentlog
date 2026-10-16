@@ -174,7 +174,7 @@ devsrv
 
 ### Codex のログ（`search`・`show`）
 
-2026-10-17 に足した。`--source claude|codex|all`（既定 all）で選び、`--codex-root DIR`（何度でも）で置き場所を渡す。既定は `~/.codex/sessions` と `~/.codex/archived_sessions` のうち、あるもの。写しを読むときは、写しの `sessions` と `archived_sessions` の 2 か所を渡す。`repeats`・`tool`・`daily` は今も Claude だけ（`--source`・`--codex-root` を付けると入力の誤り、終了コード 2）。`--source codex` だけで置き場所がなければ終了コード 3。`all` のとき Codex がない機械は黙って飛ばす。出力の各行（JSON は `source`）と `show` の見出しに `claude` / `codex` の印が付く。
+2026-10-17 に足した。`--source claude|codex|all` で選ぶ。既定は search が claude、show が all。Codex のログは Claude の 20 倍あり（全部を読むのに 5 秒と 0.4 秒）、今は増えないので、search は頼まれたときだけ読む（`--source` か `--codex-root` を渡したとき。`--codex-root` だけなら all）。show は Codex の id をファイル名で探すので、両方を見ても軽い。`--codex-root DIR`（何度でも）で置き場所を渡す。既定は `~/.codex/sessions` と `~/.codex/archived_sessions` のうち、あるもの。写しを読むときは、写しの `sessions` と `archived_sessions` の 2 か所を渡す。`repeats`・`tool`・`daily` は今も Claude だけ（`--source`・`--codex-root` を付けると入力の誤り、終了コード 2）。`--source codex` だけで置き場所がなければ終了コード 3。`all` のとき Codex がない機械は黙って飛ばす。出力の各行（JSON は `source`）と `show` の見出しに `claude` / `codex` の印が付く。
 
 **ファイル.** `rollout-<時刻>-<uuid>.jsonl`。時刻はそのマシンの地方時で、日付のフォルダ（`YYYY/MM/DD`）も同じ。行は `{"timestamp":UTC,"ordinal":N,"type":…,"payload":{"type":…}}`。1 行目は `session_meta`（id・`cwd`・`originator`、サブエージェントなら `source.subagent`・`parent_thread_id`・`subagent_history_start_ordinal`）。実際のログ（2026-02〜10、1,815 ファイル、約 26 GB）は、`token_count`・`item_completed`・`reasoning`・ツールの出力が大半で、メッセージの行は 1 割に満たない（約 177 万行のうち約 15 万）。
 

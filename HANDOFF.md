@@ -4,9 +4,9 @@
 
 測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
 
-## search と show で Codex のログも読む（2026-10-17、ブランチ `codex`。main には未取り込み、`cargo install` もまだ）
+## search と show で Codex のログも読む（2026-10-17、main に取り込み、`cargo install` 済み）
 
-`search`・`show` が Claude Code と Codex の両方を読む。`--source claude|codex|all`（既定 all）、`--codex-root DIR`（何度でも。既定は `~/.codex/sessions` と `~/.codex/archived_sessions`）。出力の行と `show` の見出しに `claude` / `codex` の印、JSON に `source`。`repeats`・`tool`・`daily` は Claude だけのまま。仕様は `docs/design.md` の「Codex のログ」、使い方は `docs/recipes.md` の 4、`src/help.txt` の最後の節。
+`search`・`show` が Claude Code と Codex の両方を読む。`--source claude|codex|all`（既定は search が claude、show が all。`--codex-root` を渡した search は all）、`--codex-root DIR`（何度でも。既定は `~/.codex/sessions` と `~/.codex/archived_sessions`）。出力の行と `show` の見出しに `claude` / `codex` の印、JSON に `source`。`repeats`・`tool`・`daily` は Claude だけのまま。仕様は `docs/design.md` の「Codex のログ」、使い方は `docs/recipes.md` の 4、`src/help.txt` の最後の節。
 
 - **作り.** `codex.rs`（ファイル選び、人の発言の見分け、ツールの1行）と `needle.rs`（式から「必ず入る文字列」を取り出し、生の行で先に見る）を足した。`talk.rs` の `Session` に `source` を持たせ、`recall.rs` の出力は共通。
 - **決めたこと.** 人の発言は、`user` の `message` の `input_text` ブロックから、アプリの差し込み（`<in-app-browser-context>` など11種のタグ、`# AGENTS.md instructions` などの書き出し、添付の一覧）を外したもの。サブエージェントのセッションの `user` は `task`。id は末尾 8 文字で、`show` はどの部分でも受け付ける。同じ id が複数の場所にあれば大きいファイルを 1 つ。分岐したサブエージェントのファイルの、親の写し（`subagent_history_start_ordinal` 未満）は飛ばす。
@@ -14,7 +14,7 @@
 - **確かめ.** 単体 24 件、結合 24 件（Codex は 8 件、手で書いた架空のログ）。わざと壊して落ちるのを確かめた：`<in-app-browser-context>` を人の発言に入れる、壊れた行でそのファイルの読みを止める、`sessions/` と `archived_sessions/` の同じ id を二重に読む、`"` を探す文字列に入れる、親の写しを読む、添付のあとの本文を捨てる。本物のログでは、架空でない内容をテストにも文書にも入れていない。
 - **残した課題.** 行の種類をキーの並び（`"type":"response_item","payload":{"type":"message"`）で見分けているので、Codex がそれを変えると黙って何も出なくなる（テストは手書きで気づけない）。ほかのアプリ（Orca など）が送る依頼文は `codex.rs` の `SENT_STARTS` に足す。`# Diff comments:` は残した。`repeats` などを Codex に広げるかは未定。`cargo install` と、`~/.claude/CLAUDE.md` の案内（`--source` の一言）はまだ。
 
-## search と show（2026-10-17、ブランチ `search-show`。main には未取り込み、`cargo install` もまだ）
+## search と show（2026-10-17、main に取り込み、`cargo install` 済み）
 
 振り返りのためにログを「探す」「読む」を足した。`agentlog search REGEX`（人の発言と assistant の text を正規表現で探して1行ずつ、古い順）と `agentlog show SESSION`（`--grep` か `--at` を中心に前後 `--around N` 発言、ツールの呼び出しは1行）。窓の既定は制限なし。仕様と見分け方は `docs/design.md` の「search と show」、探し方の手順は `docs/recipes.md` の 4。DB・索引・常駐は持たない（全ログ 1.3 GB で 0.4〜0.5 秒）。
 
