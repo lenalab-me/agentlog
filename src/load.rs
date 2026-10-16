@@ -51,7 +51,7 @@ pub struct Log {
     pub calls: Vec<Call>,
 }
 
-fn clip(s: &str) -> String {
+pub fn clip(s: &str) -> String {
     if s.len() <= KEEP {
         return s.to_string();
     }
@@ -88,7 +88,7 @@ fn mtime(p: &Path) -> i64 {
 }
 
 /// `-Users-me-project-prod-x` → `project-prod-x`, from the home directory's spelling.
-fn short_project(dir: &str) -> String {
+pub fn short_project(dir: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let prefix: String = home
         .chars()
@@ -210,26 +210,42 @@ fn read_file(path: &Path, f: &Filter) -> io::Result<Vec<Call>> {
     Ok(calls)
 }
 
-pub fn load(root: &Path, f: &Filter) -> io::Result<Log> {
+/// The files a window and the project/exclude filters leave to read, in path order.
+pub fn select_files(root: &Path, f: &Filter) -> io::Result<Vec<PathBuf>> {
     fs::read_dir(root)?;
     let mut files = Vec::new();
     jsonl_files(root, &mut files);
     files.retain(|p| {
         let s = p.to_string_lossy();
-        let rel = p.strip_prefix(root).unwrap_or(p);
-        let project = rel
-            .iter()
-            .next()
-            .map(|c| c.to_string_lossy())
-            .unwrap_or_default();
         mtime(p) >= f.since
             && !f.excludes.iter().any(|x| s.contains(x.as_str()))
-            && (f.projects.is_empty() || f.projects.iter().any(|x| project.contains(x.as_str())))
+            && (f.projects.is_empty()
+                || f.projects
+                    .iter()
+                    .any(|x| folder_of(root, p).contains(x.as_str())))
     });
     files.sort();
+    Ok(files)
+}
 
+/// The project directory a log file sits in (`-Users-me-project-x`).
+pub fn folder_of(root: &Path, p: &Path) -> String {
+    p.strip_prefix(root)
+        .unwrap_or(p)
+        .iter()
+        .next()
+        .map(|c| c.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Reads every file on worker threads; results come back in file order. A file that
+/// `read` gives up on (unreadable, half-written, nothing in it) is left out.
+pub fn read_all<T: Send>(
+    files: &[PathBuf],
+    read: impl Fn(&Path) -> Option<T> + Sync,
+) -> Vec<(usize, T)> {
     let next = AtomicUsize::new(0);
-    let results: Mutex<Vec<(usize, Vec<Call>)>> = Mutex::new(Vec::new());
+    let results: Mutex<Vec<(usize, T)>> = Mutex::new(Vec::new());
     let workers = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
@@ -240,19 +256,22 @@ pub fn load(root: &Path, f: &Filter) -> io::Result<Log> {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(p) = files.get(i) else { break };
-                    // An unreadable or half-written file is skipped, not fatal.
-                    if let Ok(calls) = read_file(p, f)
-                        && !calls.is_empty()
-                    {
-                        results.lock().unwrap().push((i, calls));
+                    if let Some(r) = read(p) {
+                        results.lock().unwrap().push((i, r));
                     }
                 }
             });
         }
     });
-
     let mut results = results.into_inner().unwrap();
     results.sort_by_key(|(i, _)| *i);
+    results
+}
+
+pub fn load(root: &Path, f: &Filter) -> io::Result<Log> {
+    let files = select_files(root, f)?;
+    // An unreadable or half-written file is skipped, not fatal.
+    let results = read_all(&files, |p| read_file(p, f).ok().filter(|c| !c.is_empty()));
     let mut log = Log {
         ctxs: Vec::new(),
         calls: Vec::new(),

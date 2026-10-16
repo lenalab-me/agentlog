@@ -3,9 +3,10 @@
 
 use std::path::PathBuf;
 
-use regex_lite::Regex;
+use regex_lite::{Regex, RegexBuilder};
 
 use crate::commands::{DailyOpts, Field, PRESETS, RepeatsOpts, Spec, ToolOpts, preset};
+use crate::recall::{SearchOpts, ShowOpts, WhoFilter};
 use crate::time;
 
 pub const HELP: &str = include_str!("help.txt");
@@ -16,6 +17,9 @@ pub enum Cmd {
     Repeats(RepeatsOpts),
     Tool(Spec, ToolOpts),
     Daily(DailyOpts),
+    Search(SearchOpts),
+    /// The session (an id or its start) and what to show of it.
+    Show(String, ShowOpts),
 }
 
 pub struct Common {
@@ -32,7 +36,7 @@ pub struct Parsed {
     pub common: Common,
 }
 
-const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX... [--since 14d] [--until WHEN] [--project S] [--exclude S] [--json]  (agentlog --help)";
+const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json]  (agentlog --help)";
 
 fn regex(flag: &str, s: &str) -> Result<Regex, String> {
     Regex::new(s).map_err(|e| format!("{flag}: not a regex: {e}"))
@@ -41,6 +45,27 @@ fn regex(flag: &str, s: &str) -> Result<Regex, String> {
 fn number(flag: &str, s: &str) -> Result<usize, String> {
     s.parse()
         .map_err(|_| format!("{flag}: expected a number, got `{s}`"))
+}
+
+/// `--at`: a local time (or one with a zone). A time given to the minute means that
+/// minute, a date alone the whole day.
+fn at_range(v: &str) -> Option<(i64, i64)> {
+    let t = time::parse_iso(v)?;
+    let clock = v.trim().split(['T', ' ']).nth(1);
+    let span = match clock {
+        None => 86399,
+        Some(c) => match c
+            .split(['Z', '+', '-'])
+            .next()
+            .unwrap_or("")
+            .matches(':')
+            .count()
+        {
+            0 | 1 => 59,
+            _ => 0,
+        },
+    };
+    Some((t, t + span))
 }
 
 pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
@@ -62,6 +87,14 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     let mut field = Field::Any;
     let mut failed_only = false;
     let mut include_self = false;
+    let mut since_given = false;
+    let mut ignore_case = false;
+    let mut who = WhoFilter::Any;
+    let mut limit = 50;
+    let mut grep: Option<String> = None;
+    let mut at: Option<(i64, i64)> = None;
+    let mut around = 5;
+    let mut full = false;
     let (mut uses, mut fail, mut alt, mut escape, mut ignore) = (None, None, None, None, None);
     let mut alt_tools: Option<Vec<String>> = None;
     let mut escape_tools: Option<Vec<String>> = None;
@@ -99,6 +132,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             }
             "--json" => common.json = true,
             "--since" => {
+                since_given = true;
                 let v = value(&mut it)?;
                 common.since = time::parse_when(&v, now).ok_or_else(|| {
                     format!("--since: expected 2026-10-07, 2026-10-07T08:57, …Z, or 14d; got `{v}`")
@@ -128,6 +162,31 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 }
             }
             "--failed" => failed_only = true,
+            "-i" => ignore_case = true,
+            "--full" => full = true,
+            "--who" => {
+                who = match value(&mut it)?.as_str() {
+                    "user" => WhoFilter::User,
+                    "assistant" => WhoFilter::Assistant,
+                    "any" => WhoFilter::Any,
+                    v => return Err(format!("--who: expected user, assistant or any; got `{v}`")),
+                }
+            }
+            "--limit" => limit = number("--limit", &value(&mut it)?)?,
+            "--around" => around = number("--around", &value(&mut it)?)?,
+            "--grep" => grep = Some(value(&mut it)?),
+            "--at" => {
+                let v = value(&mut it)?;
+                at = Some(at_range(&v).ok_or_else(|| {
+                    format!(
+                        "--at: expected 2026-10-07T08:57 (local) or 2026-10-07 08:57; got `{v}`"
+                    )
+                })?);
+            }
+            "--" => {
+                pos.extend(it.by_ref());
+                break;
+            }
             "--uses" => uses = Some(regex("--uses", &value(&mut it)?)?),
             "--fail" => fail = Some(regex("--fail", &value(&mut it)?)?),
             "--alt" => alt = Some(regex("--alt", &value(&mut it)?)?),
@@ -141,9 +200,21 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             _ => pos.push(a),
         }
     }
+    let Some(sub) = pos.first().cloned() else {
+        return Ok(Parsed {
+            cmd: Cmd::Help,
+            common,
+        });
+    };
+    // Looking back for a conversation may reach far; the other reports want recent calls.
+    if (sub == "search" || sub == "show") && !since_given {
+        common.since = 0;
+    }
     // Run from a Claude Code session, leave that session out: its own calls (this
-    // analysis) are not what is being measured.
+    // analysis) are not what is being measured. `show` names its session, so it is not
+    // left out there.
     if !include_self
+        && sub != "show"
         && let Ok(id) = std::env::var("CLAUDE_CODE_SESSION_ID")
         && !id.is_empty()
     {
@@ -153,12 +224,6 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         return Err("--since must be before --until".into());
     }
 
-    let Some(sub) = pos.first().cloned() else {
-        return Ok(Parsed {
-            cmd: Cmd::Help,
-            common,
-        });
-    };
     let rest = &pos[1..];
     let cmd = match sub.as_str() {
         "repeats" => {
@@ -232,6 +297,45 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 tool: tool_filter,
                 failed_only,
             })
+        }
+        "search" => {
+            let [pattern] = rest else {
+                return Err(format!(
+                    "search takes one REGEX (put `--` before one that starts with `-`)\n{USAGE}"
+                ));
+            };
+            let re = RegexBuilder::new(pattern)
+                .case_insensitive(ignore_case)
+                .build()
+                .map_err(|e| format!("search: not a regex: {e}"))?;
+            Cmd::Search(SearchOpts { re, who, limit })
+        }
+        "show" => {
+            let [session] = rest else {
+                return Err(format!(
+                    "show takes one SESSION (an id or its first characters, as search prints it)\n{USAGE}"
+                ));
+            };
+            if grep.is_some() && at.is_some() {
+                return Err("show: use --grep or --at, not both".into());
+            }
+            let grep = grep
+                .map(|g| {
+                    RegexBuilder::new(&g)
+                        .case_insensitive(ignore_case)
+                        .build()
+                        .map_err(|e| format!("--grep: not a regex: {e}"))
+                })
+                .transpose()?;
+            Cmd::Show(
+                session.clone(),
+                ShowOpts {
+                    grep,
+                    at,
+                    around,
+                    full,
+                },
+            )
         }
         other => return Err(format!("unknown command `{other}`\n{USAGE}")),
     };

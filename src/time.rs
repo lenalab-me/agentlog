@@ -132,6 +132,18 @@ pub fn minute(t: i64) -> String {
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}")
 }
 
+/// UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+pub fn iso_utc(t: i64) -> String {
+    let (y, m, d) = civil_from_days(t.div_euclid(86400));
+    let s = t.rem_euclid(86400);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        s / 3600,
+        s % 3600 / 60,
+        s % 60
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +157,8 @@ mod tests {
             parse_iso("2026-10-13T11:49:19-00:30"),
             Some(1791892159 + 1800)
         );
+        assert_eq!(iso_utc(1791892159), "2026-10-13T11:49:19Z");
+        assert_eq!(parse_iso(&iso_utc(1791892159)), Some(1791892159));
     }
 
     #[test]

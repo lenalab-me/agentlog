@@ -1,13 +1,16 @@
-agentlog - find what coding agents keep getting wrong, from Claude Code session logs
+agentlog - Claude Code session logs: what agents keep getting wrong, and what was said
 
 Usage:
   agentlog repeats [--tool T] [--top 30] [--all] [-v | --examples N]
   agentlog tool NAME [--uses RE] [--fail RE] [--alt RE] [--alt-tool T,T]
                      [--escape RE] [--escape-tool T,T] [--ignore RE] [-v]
   agentlog daily NAME=REGEX... [--in input|result|any] [--tool T] [--failed]
+  agentlog search REGEX [-i] [--who user|assistant|any] [--limit 50]
+  agentlog show SESSION [--grep RE | --at TIME] [--around 5] [--full] [-i]
 Every command takes:
-  --since WHEN (default 14d)  --until WHEN  --project S  --exclude S  --root DIR  --json
+  --since WHEN  --until WHEN  --project S  --exclude S  --root DIR  --json
   --include-self (run inside Claude Code, the running session is left out by default)
+  --since defaults to 14d, but to no limit for search and show (look back as far as needed).
   WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
 
 Examples:
@@ -15,10 +18,30 @@ Examples:
   agentlog repeats --tool Bash -v                   with the commands (may hold secrets)
   agentlog tool rpatch --since 2026-10-06T23:57Z    did it fix itself, or go another way?
   agentlog tool devsrv --since 2026-10-01           other ways per day, before and after
-  agentlog tool mcp__aws-knowledge__aws___search_documentation
   agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
+  agentlog search 'too loose' -i --who user         what was said, oldest first
+  agentlog show 42240b0c --at '2026-10-02 14:25'    read around a hit (id and time as printed)
 
-What it counts:
+Output: text tables; --json prints one JSON object instead (search: one object per hit,
+one per line). Commands appear only with -v/--examples, since they can hold credentials;
+show prints each tool call as a one-line note and never the result.
+Exit status: 0 ok (also with 0 hits); 2 invalid input, or SESSION not found or not unique;
+3 the log directory cannot be read.
+
+search: one line per utterance that matches (the first match in it): local time, who
+  (user, assistant, or task = a prompt the parent gave a subagent), id, project, and
+  about 40 characters either side. Oldest first; past --limit the newest are kept and the
+  count is printed. Only typed words and the assistant's text are searched: not tool
+  inputs, tool results, thinking, system reminders or other text the harness adds.
+  id is 8 characters of the session, or SESSION/AGENT for a subagent. Project is the
+  session's first working directory, without home and project/prod/. -i ignores case.
+show: SESSION is an id or its first characters (several fit: they are listed, exit 2).
+  It prints the utterances in order, tool calls as `[Bash] first line…`. --grep RE (first
+  utterance that matches) or --at TIME (nearest; to the minute covers the minute) picks
+  one, and --around N shows N utterances either side; neither: the whole session.
+  Utterances are cut at 2000 characters unless --full.
+
+What it counts (repeats, tool, daily):
   Each session file and each subagent file is one context (a subagent starts empty, so
   the same mistake there counts again). The window applies to each call's own time, so
   a resumed old session does not bring its old calls in.
@@ -46,7 +69,3 @@ What it counts:
 
   daily: calls per local day whose input (the Bash command, the file path, or the tool
   input) or result matches each REGEX.
-
-Output: text tables; --json prints one JSON object instead. Commands appear only with
--v/--examples, since they can hold credentials.
-Exit status: 0 ok; 2 invalid input; 3 the log directory cannot be read.
