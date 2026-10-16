@@ -302,22 +302,37 @@ impl World {
 
 /// Where two answers first part, short enough to read.
 fn first_difference(cached: &Out, raw: &Out) -> String {
-    let cut = |s: Option<&str>| match s {
-        None => "(no line)".to_string(),
-        Some(s) => s.chars().take(160).collect(),
+    // From a little before the first character where the two lines part.
+    let (la, lb) = (
+        cached.1.lines().collect::<Vec<_>>(),
+        raw.1.lines().collect::<Vec<_>>(),
+    );
+    let at = |i: usize| {
+        let (x, y) = (
+            la.get(i).copied().unwrap_or(""),
+            lb.get(i).copied().unwrap_or(""),
+        );
+        x.chars()
+            .zip(y.chars())
+            .take_while(|(p, q)| p == q)
+            .count()
+            .saturating_sub(30)
     };
     if cached.0 != raw.0 {
         return format!("exit status: cache {}, logs {}\n{}", cached.0, raw.0, raw.2);
     }
-    let (a, b): (Vec<&str>, Vec<&str>) = (cached.1.lines().collect(), raw.1.lines().collect());
-    let i = (0..a.len().max(b.len()))
-        .find(|&i| a.get(i) != b.get(i))
+    let i = (0..la.len().max(lb.len()))
+        .find(|&i| la.get(i) != lb.get(i))
         .unwrap_or(0);
+    let cut = |s: Option<&&str>| match s {
+        None => "(no line)".to_string(),
+        Some(s) => s.chars().skip(at(i)).take(140).collect(),
+    };
     format!(
-        "line {}:\n  cache: {}\n  logs:  {}",
+        "line {}:\n  cache: …{}\n  logs:  …{}",
         i + 1,
-        cut(a.get(i).copied()),
-        cut(b.get(i).copied())
+        cut(la.get(i)),
+        cut(lb.get(i))
     )
 }
 
