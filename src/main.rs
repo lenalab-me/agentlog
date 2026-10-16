@@ -1,9 +1,11 @@
 // The parsed command is built once per run; its size does not matter.
 #![allow(clippy::large_enum_variant)]
 
+mod cache;
 mod cli;
 mod codex;
 mod commands;
+mod lines;
 mod load;
 mod needle;
 mod recall;
@@ -107,25 +109,40 @@ fn conversation(
     c: &cli::Common,
     filter: &load::Filter,
     pre: Option<&needle::Prefilter>,
+    need: cache::Need,
 ) -> Vec<talk::Session> {
+    let cache = cache_of(c);
     let mut sessions = Vec::new();
     if c.source.claude() {
         sessions.extend(
-            talk::load_sessions(&c.root, filter, false)
+            talk::load_sessions(&c.root, filter, need, pre, &cache)
                 .unwrap_or_else(|e| unreadable(c.root.display(), e)),
         );
     }
     if let Some(roots) = codex_roots(c) {
         sessions.extend(
-            codex::load_sessions(roots, filter, false, pre)
+            codex::load_sessions(roots, filter, need, pre, &cache)
                 .unwrap_or_else(|e| unreadable("the Codex logs", e)),
         );
     }
     sessions
 }
 
+/// Where what is read from the logs is kept; nowhere with `--raw`.
+fn cache_of(c: &cli::Common) -> cache::Cache {
+    if c.raw {
+        cache::Cache::off()
+    } else {
+        cache::Cache::standard()
+    }
+}
+
 fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
-    let sessions = conversation(c, filter, o.prefilter.as_ref());
+    let need = cache::Need {
+        tools: false,
+        cwds: false,
+    };
+    let sessions = conversation(c, filter, o.prefilter.as_ref(), need);
     let (text, hits, note) = recall::search(&sessions, o);
     if c.json {
         // One object per hit, so the output reads line by line; the note goes aside.
@@ -151,7 +168,11 @@ fn timeline(c: &cli::Common, filter: &load::Filter, o: &timeline::TimelineOpts) 
     let home = std::env::var("HOME").unwrap_or_default();
     let repo = timeline::Repo::find(&o.repo, &home).unwrap_or_else(|e| bad(e));
     let commits = timeline::commits(&o.repo, c.since, c.until).unwrap_or_else(|e| bad(e));
-    let sessions = conversation(c, filter, None);
+    let need = cache::Need {
+        tools: false,
+        cwds: true,
+    };
+    let sessions = conversation(c, filter, None, need);
     // --project S picks sessions by name (already done by the filter); without it they are
     // the ones that worked in the repository or one of its worktrees.
     let mine: Vec<&talk::Session> = sessions
@@ -179,6 +200,7 @@ fn timeline(c: &cli::Common, filter: &load::Filter, o: &timeline::TimelineOpts) 
 }
 
 fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts) {
+    let cache = cache_of(c);
     let mut sessions: Vec<talk::Session> = Vec::new();
     if c.source.claude() {
         let files = talk::session_files(&c.root, filter, spec)
@@ -186,7 +208,7 @@ fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts
         sessions.extend(
             files
                 .iter()
-                .filter_map(|p| talk::load_one(&c.root, p, filter).ok()),
+                .filter_map(|p| talk::load_one(&c.root, p, filter, &cache).ok()),
         );
     }
     // `SESSION/AGENT` names a Claude subagent; a Codex id has no slash.
@@ -195,7 +217,11 @@ fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts
     {
         let files = codex::session_files(roots, filter, spec)
             .unwrap_or_else(|e| unreadable("the Codex logs", e));
-        sessions.extend(files.iter().filter_map(|p| codex::load_one(p, filter).ok()));
+        sessions.extend(
+            files
+                .iter()
+                .filter_map(|p| codex::load_one(roots, p, filter, &cache).ok()),
+        );
     }
     sessions.retain(|s| !s.events.is_empty());
     if sessions.len() != 1 {

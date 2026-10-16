@@ -9,14 +9,16 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use memchr::{memchr, memmem};
+use memchr::memmem;
 use regex_lite::Regex;
 use serde_json::Value;
 
+use crate::cache::{self, Cache, Extract, Need, Slot};
+use crate::lines;
 use crate::load::{self, Filter};
 use crate::needle::Prefilter;
 use crate::talk::{self, Event, Session, Source, Who};
@@ -64,13 +66,18 @@ fn stem_of(p: &Path) -> String {
 /// (`sessions/` and `archived_sessions/`, a live directory and its copy): the largest
 /// file of an id is read, the first listed when sizes are equal.
 pub fn select_files(roots: &[PathBuf], f: &Filter) -> io::Result<Vec<PathBuf>> {
+    Ok(list(roots, f)?.0)
+}
+
+/// The files `select_files` gives, and every log file under the roots.
+fn list(roots: &[PathBuf], f: &Filter) -> io::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
     let mut all = Vec::new();
     for r in roots {
         fs::read_dir(r).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", r.display())))?;
         load::jsonl_files(r, &mut all);
     }
     let mut best: HashMap<String, (u64, PathBuf)> = HashMap::new();
-    for p in all {
+    for p in all.iter().cloned() {
         let s = p.to_string_lossy();
         if f.excludes.iter().any(|x| s.contains(x.as_str())) {
             continue;
@@ -92,7 +99,7 @@ pub fn select_files(roots: &[PathBuf], f: &Filter) -> io::Result<Vec<PathBuf>> {
     }
     let mut files: Vec<PathBuf> = best.into_values().map(|(_, p)| p).collect();
     files.sort();
-    Ok(files)
+    Ok((files, all))
 }
 
 /// The files a `show SESSION` may mean: those whose id contains `spec`.
@@ -105,51 +112,7 @@ pub fn session_files(roots: &[PathBuf], f: &Filter, spec: &str) -> io::Result<Ve
 }
 
 // ---------------------------------------------------------------------------------------
-// Reading lines without reading them all
-
-const CHUNK: usize = 4 << 20;
-/// How much of a line's start `want` sees.
-const HEAD: usize = 256;
-
-/// Calls `on_line(number, line)` for each line `want(number, first bytes)` accepts. A line
-/// that is not accepted is passed over without being kept, however long it is.
-fn scan(
-    path: &Path,
-    want: impl Fn(usize, &[u8]) -> bool,
-    mut on_line: impl FnMut(usize, &[u8]),
-) -> io::Result<()> {
-    let mut file = fs::File::open(path)?;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut n = 0usize;
-    let mut skipping = false;
-    let head = |b: &[u8]| b.len().min(HEAD);
-    loop {
-        let got = (&mut file).take(CHUNK as u64).read_to_end(&mut buf)?;
-        let mut pos = 0;
-        while let Some(i) = memchr(b'\n', &buf[pos..]) {
-            let line = &buf[pos..pos + i];
-            if skipping {
-                skipping = false;
-            } else if want(n, &line[..head(line)]) {
-                on_line(n, line);
-            }
-            n += 1;
-            pos += i + 1;
-        }
-        buf.drain(..pos);
-        if got == 0 {
-            // The last line has no newline (a half-written one is rejected when parsed).
-            if !skipping && !buf.is_empty() && want(n, &buf[..head(&buf)]) {
-                on_line(n, &buf);
-            }
-            return Ok(());
-        }
-        if skipping || (buf.len() >= HEAD && !want(n, &buf[..HEAD])) {
-            skipping = true;
-            buf.clear();
-        }
-    }
-}
+// What a line is
 
 #[derive(PartialEq, Eq)]
 enum Kind {
@@ -344,161 +307,171 @@ fn exec_cmd() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r#"exec_command\(\{\s*cmd\s*:\s*["'`]([^"'`\n]*)"#).unwrap())
 }
 
-struct Reader<'a> {
-    f: &'a Filter,
-    tools: bool,
-    pre: Option<&'a Prefilter>,
-    events: Vec<Event>,
-    cwd: Option<String>,
-    /// A subagent's file starts with a copy of its parent's lines, up to this ordinal.
-    own_from: u64,
-    /// A subagent's user lines are the parent's prompts, not a person's words.
-    subagent: bool,
-}
-
-impl Reader<'_> {
-    fn line(&mut self, n: usize, line: &[u8]) {
-        if n == 0
-            && memmem::find(&line[..line.len().min(HEAD)], b"\"type\":\"session_meta\"").is_some()
-        {
-            self.meta(line);
-            return;
-        }
-        let kind = kind(&line[..line.len().min(HEAD)]);
-        if kind == Kind::Other {
-            return;
-        }
-        let is_message = kind == Kind::Message;
-        if is_message
-            && let Some(p) = self.pre
-            && !p.may_match(line)
-        {
-            return;
-        }
-        // A line that is not JSON (half written, damaged) is passed over.
-        let Ok(v) = serde_json::from_slice::<Value>(line) else {
-            return;
-        };
-        if v.get("ordinal")
-            .and_then(Value::as_u64)
-            .is_some_and(|o| o < self.own_from)
-        {
-            return;
-        }
-        let Some(ts) = str_field(&v, "timestamp").and_then(time::parse_iso) else {
-            return;
-        };
-        if ts < self.f.since || ts >= self.f.until {
-            return;
-        }
-        let Some(p) = v.get("payload") else { return };
-        if !is_message {
-            self.events.push(Event {
-                ts,
-                who: None,
-                text: call_line(p),
-            });
-            return;
-        }
-        let content = p.get("content").unwrap_or(&Value::Null);
-        match str_field(p, "role") {
-            Some("assistant") => {
-                let text = texts(content).join("\n");
-                let text = text.trim();
-                if !text.is_empty() {
-                    self.events.push(Event {
-                        ts,
-                        who: Some(Who::Assistant),
-                        text: text.to_string(),
-                    });
-                }
-            }
-            Some("user") => {
-                let Some(text) = human_text(&texts(content)) else {
-                    return;
-                };
-                let who = if self.subagent
-                    || talk::sent_for_a_task(&text)
-                    || SENT_STARTS.iter().any(|p| text.starts_with(p))
-                {
-                    Who::Task
-                } else {
-                    Who::User
-                };
-                self.events.push(Event {
-                    ts,
-                    who: Some(who),
-                    text,
-                });
-            }
-            _ => {}
-        }
-    }
-
-    fn meta(&mut self, line: &[u8]) {
-        let Ok(v) = serde_json::from_slice::<Value>(line) else {
-            return;
-        };
-        let Some(p) = v.get("payload") else { return };
-        self.cwd = str_field(p, "cwd").map(str::to_string);
-        self.own_from = p
-            .get("subagent_history_start_ordinal")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        self.subagent = p.pointer("/source/subagent").is_some()
-            || p.get("parent_thread_id").is_some()
-            || str_field(p, "thread_source") == Some("subagent");
-    }
-}
-
-fn read_session(
+/// Takes what `search`, `show` and `timeline` use out of a Codex log, from byte `from` on,
+/// into `ex`; returns where the next read should start. `tools` also takes a note for each
+/// tool call; `pre` lets messages that cannot match be passed over unparsed. What counts
+/// as a person's words, and the rest, is decided here and nowhere else: `--raw` and the
+/// cache both come through this function.
+pub fn read_lines(
     path: &Path,
-    f: &Filter,
+    from: u64,
+    ex: &mut Extract,
     tools: bool,
     pre: Option<&Prefilter>,
-) -> io::Result<Session> {
-    let mut r = Reader {
-        f,
-        tools,
-        pre,
-        events: Vec::new(),
-        cwd: None,
-        own_from: 0,
-        subagent: false,
-    };
-    let tools = r.tools;
-    scan(
+) -> io::Result<u64> {
+    lines::scan_from(
         path,
+        from,
         |n, head| {
             n == 0 || matches!(kind(head), Kind::Message) || tools && kind(head) == Kind::Call
         },
-        |n, line| r.line(n, line),
-    )?;
-    Ok(Session {
+        |n, line| codex_line(n, line, pre, ex),
+    )
+}
+
+fn codex_line(n: usize, line: &[u8], pre: Option<&Prefilter>, ex: &mut Extract) {
+    let head = &line[..line.len().min(lines::HEAD)];
+    if n == 0 && memmem::find(head, b"\"type\":\"session_meta\"").is_some() {
+        meta(line, ex);
+        return;
+    }
+    let kind = kind(head);
+    if kind == Kind::Other {
+        return;
+    }
+    let is_message = kind == Kind::Message;
+    if is_message
+        && let Some(p) = pre
+        && !p.may_match(line)
+    {
+        return;
+    }
+    // A line that is not JSON (half written, damaged) is passed over.
+    let Ok(v) = serde_json::from_slice::<Value>(line) else {
+        return;
+    };
+    if v.get("ordinal")
+        .and_then(Value::as_u64)
+        .is_some_and(|o| o < ex.own_from)
+    {
+        return;
+    }
+    let Some(ts) = str_field(&v, "timestamp").and_then(time::parse_iso) else {
+        return;
+    };
+    let Some(p) = v.get("payload") else { return };
+    if !is_message {
+        ex.events.push(Event {
+            ts,
+            who: None,
+            text: call_line(p),
+        });
+        return;
+    }
+    let content = p.get("content").unwrap_or(&Value::Null);
+    match str_field(p, "role") {
+        Some("assistant") => {
+            let text = texts(content).join("\n");
+            let text = text.trim();
+            if !text.is_empty() {
+                ex.events.push(Event {
+                    ts,
+                    who: Some(Who::Assistant),
+                    text: text.to_string(),
+                });
+            }
+        }
+        Some("user") => {
+            let Some(text) = human_text(&texts(content)) else {
+                return;
+            };
+            let who = if ex.subagent
+                || talk::sent_for_a_task(&text)
+                || SENT_STARTS.iter().any(|p| text.starts_with(p))
+            {
+                Who::Task
+            } else {
+                Who::User
+            };
+            ex.events.push(Event {
+                ts,
+                who: Some(who),
+                text,
+            });
+        }
+        _ => {}
+    }
+}
+
+fn meta(line: &[u8], ex: &mut Extract) {
+    let Ok(v) = serde_json::from_slice::<Value>(line) else {
+        return;
+    };
+    let Some(p) = v.get("payload") else { return };
+    ex.cwd = str_field(p, "cwd").map(str::to_string);
+    // A subagent's file starts with a copy of its parent's lines, up to this ordinal; and
+    // its user lines are the parent's prompts, not a person's words.
+    ex.own_from = p
+        .get("subagent_history_start_ordinal")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    ex.subagent = p.pointer("/source/subagent").is_some()
+        || p.get("parent_thread_id").is_some()
+        || str_field(p, "thread_source") == Some("subagent");
+}
+
+/// The session an extract stands for, cut to the window.
+fn session_of(path: &Path, ex: Extract, f: &Filter) -> Session {
+    Session {
         source: Source::Codex,
-        project: r
+        project: ex
             .cwd
             .as_deref()
             .map(talk::project_name)
             .unwrap_or_else(|| "?".into()),
         sid: id_of(&stem_of(path)),
         agent: None,
-        events: r.events,
-        cwds: r.cwd.into_iter().map(|c| (c, 1)).collect(),
-    })
+        events: ex
+            .events
+            .into_iter()
+            .filter(|e| e.ts >= f.since && e.ts < f.until)
+            .collect(),
+        cwds: ex.cwd.into_iter().map(|c| (c, 1)).collect(),
+    }
 }
 
-/// Every session in the window with something said in it. With `pre`, only the messages
-/// that may match are kept (all `search` looks at).
+fn read_session(
+    path: &Path,
+    f: &Filter,
+    need: Need,
+    pre: Option<&Prefilter>,
+    slot: Option<&Slot>,
+) -> io::Result<Session> {
+    let ex = cache::fetch(slot, path, need, pre, |from, ex, tools, pre| {
+        read_lines(path, from, ex, tools, pre)
+    })?;
+    Ok(session_of(path, ex, f))
+}
+
+/// Every session in the window with something said in it. With `pre`, messages that cannot
+/// match are left out (all `search` looks at).
 pub fn load_sessions(
     roots: &[PathBuf],
     f: &Filter,
-    tools: bool,
+    need: Need,
     pre: Option<&Prefilter>,
+    cache: &Cache,
 ) -> io::Result<Vec<Session>> {
-    let files = select_files(roots, f)?;
+    let (files, all) = list(roots, f)?;
+    for r in roots {
+        if let Some(s) = cache.slot("codex", r) {
+            let mine: Vec<PathBuf> = all.iter().filter(|p| p.starts_with(r)).cloned().collect();
+            s.sweep(&mine);
+        }
+    }
+    let slots = slots(cache, roots);
     let read = load::read_all(&files, |p| {
-        let s = read_session(p, f, tools, pre).ok()?;
+        let s = read_session(p, f, need, pre, slot_of(&slots, p)).ok()?;
         let keep = !s.events.is_empty()
             && (f.projects.is_empty() || f.projects.iter().any(|x| s.project.contains(x.as_str())));
         keep.then_some(s)
@@ -506,9 +479,29 @@ pub fn load_sessions(
     Ok(read.into_iter().map(|(_, s)| s).collect())
 }
 
+fn slots(cache: &Cache, roots: &[PathBuf]) -> Vec<(PathBuf, Slot)> {
+    roots
+        .iter()
+        .filter_map(|r| Some((r.clone(), cache.slot("codex", r)?)))
+        .collect()
+}
+
+/// The cache slot of the root a log file sits under.
+fn slot_of<'a>(slots: &'a [(PathBuf, Slot)], path: &Path) -> Option<&'a Slot> {
+    slots
+        .iter()
+        .find(|(r, _)| path.starts_with(r))
+        .map(|(_, s)| s)
+}
+
 /// Reads one file as a session, tool calls included.
-pub fn load_one(path: &Path, f: &Filter) -> io::Result<Session> {
-    read_session(path, f, true, None)
+pub fn load_one(roots: &[PathBuf], path: &Path, f: &Filter, cache: &Cache) -> io::Result<Session> {
+    let slots = slots(cache, roots);
+    let need = Need {
+        tools: true,
+        cwds: false,
+    };
+    read_session(path, f, need, None, slot_of(&slots, path))
 }
 
 #[cfg(test)]

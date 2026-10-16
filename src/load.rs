@@ -210,22 +210,34 @@ fn read_file(path: &Path, f: &Filter) -> io::Result<Vec<Call>> {
     Ok(calls)
 }
 
-/// The files a window and the project/exclude filters leave to read, in path order.
-pub fn select_files(root: &Path, f: &Filter) -> io::Result<Vec<PathBuf>> {
+/// Every log file under the root, in path order.
+pub fn all_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     fs::read_dir(root)?;
     let mut files = Vec::new();
     jsonl_files(root, &mut files);
-    files.retain(|p| {
-        let s = p.to_string_lossy();
-        mtime(p) >= f.since
-            && !f.excludes.iter().any(|x| s.contains(x.as_str()))
-            && (f.projects.is_empty()
-                || f.projects
-                    .iter()
-                    .any(|x| folder_of(root, p).contains(x.as_str())))
-    });
     files.sort();
     Ok(files)
+}
+
+/// The files of `all` that a window and the project/exclude filters leave to read.
+pub fn select_from(root: &Path, all: &[PathBuf], f: &Filter) -> Vec<PathBuf> {
+    all.iter()
+        .filter(|p| {
+            let s = p.to_string_lossy();
+            mtime(p) >= f.since
+                && !f.excludes.iter().any(|x| s.contains(x.as_str()))
+                && (f.projects.is_empty()
+                    || f.projects
+                        .iter()
+                        .any(|x| folder_of(root, p).contains(x.as_str())))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The files a window and the project/exclude filters leave to read, in path order.
+pub fn select_files(root: &Path, f: &Filter) -> io::Result<Vec<PathBuf>> {
+    Ok(select_from(root, &all_files(root)?, f))
 }
 
 /// The project directory a log file sits in (`-Users-me-project-x`).

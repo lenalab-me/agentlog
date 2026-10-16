@@ -54,6 +54,8 @@ pub struct Common {
     /// Where Codex's logs are. Unless given, the default places that exist.
     pub codex_roots: Vec<PathBuf>,
     pub codex_roots_given: bool,
+    /// `--raw`: read the logs themselves, not the cache.
+    pub raw: bool,
 }
 
 pub struct Parsed {
@@ -106,6 +108,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         source: SourceSel::All,
         codex_roots: Vec::new(),
         codex_roots_given: false,
+        raw: false,
     };
     let mut source_given = false;
     let mut pos: Vec<String> = Vec::new();
@@ -177,6 +180,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--project" => common.projects.push(value(&mut it)?),
             "--exclude" => common.excludes.push(value(&mut it)?),
             "--include-self" => include_self = true,
+            "--raw" => common.raw = true,
             "--root" => common.root = PathBuf::from(value(&mut it)?),
             "--codex-root" => {
                 common.codex_roots.push(PathBuf::from(value(&mut it)?));
@@ -278,6 +282,11 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     {
         return Err(format!(
             "--source and --codex-root are for search, show and timeline; {sub} reads Claude Code's logs only"
+        ));
+    }
+    if common.raw && sub != "search" && sub != "show" && sub != "timeline" {
+        return Err(format!(
+            "--raw is for search, show and timeline; {sub} always reads the logs themselves"
         ));
     }
     if repo.is_some() && sub != "timeline" {

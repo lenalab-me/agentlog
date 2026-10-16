@@ -12,10 +12,14 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::sync::OnceLock;
 
+use memchr::memmem;
 use regex_lite::Regex;
 use serde_json::Value;
 
+use crate::cache::{self, Cache, Extract, Need, Slot};
+use crate::lines;
 use crate::load::{self, Filter, short_project};
+use crate::needle::Prefilter;
 use crate::time;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -292,124 +296,156 @@ pub fn file_ids(path: &Path) -> (String, Option<String>) {
     ids(path, inner.as_deref())
 }
 
-fn read_session(root: &Path, path: &Path, f: &Filter, tools: bool) -> io::Result<Session> {
-    let reader = BufReader::new(fs::File::open(path)?);
-    let mut events = Vec::new();
-    let mut cwd: Option<String> = None;
-    let mut cwds: HashMap<String, u32> = HashMap::new();
-    let mut inner: Option<String> = None;
+fn has(line: &[u8], needle: &[u8]) -> bool {
+    memmem::find(line, needle).is_some()
+}
+
+/// Takes what `search`, `show` and `timeline` use out of a Claude Code log, from byte `from`
+/// on, into `ex`; returns where the next read should start. `tools` also takes a note for
+/// each tool call. What counts as a person's words, and the rest, is decided here and
+/// nowhere else: `--raw` and the cache both come through this function.
+pub fn read_lines(path: &Path, from: u64, ex: &mut Extract, tools: bool) -> io::Result<u64> {
     let agent_file = is_agent_file(path).is_some();
-    for line in reader.lines() {
-        let line = line?;
-        // Cheap skips: no text or tool call in the line, or a tool result with no text.
-        let holds_text = line.contains("\"text\"") || line.contains("\"content\":\"");
-        if !(holds_text || tools && line.contains("\"tool_use\"")) {
-            continue;
-        }
-        if line.contains("\"type\":\"tool_result\"") && !line.contains("\"type\":\"text\"") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let kind = str_field(&v, "type");
-        if kind != Some("user") && kind != Some("assistant") {
-            continue;
-        }
-        if cwd.is_none() {
-            cwd = str_field(&v, "cwd").map(str::to_string);
-        }
-        if inner.is_none() {
-            inner = str_field(&v, "sessionId").map(str::to_string);
-        }
-        let Some(ts) = str_field(&v, "timestamp").and_then(time::parse_iso) else {
-            continue;
-        };
-        if ts < f.since || ts >= f.until {
-            continue;
-        }
-        if let Some(c) = str_field(&v, "cwd") {
-            match cwds.get_mut(c) {
-                Some(n) => *n += 1,
-                None => {
-                    cwds.insert(c.to_string(), 1);
-                }
-            }
-        }
-        let Some(content) = v.pointer("/message/content") else {
-            continue;
-        };
-        if kind == Some("assistant") {
-            if str_field(&v["message"], "model") == Some("<synthetic>") {
-                continue;
-            }
-            let Some(blocks) = content.as_array() else {
-                continue;
-            };
-            for b in blocks {
-                match str_field(b, "type") {
-                    Some("text") => {
-                        let t = str_field(b, "text").unwrap_or("").trim();
-                        if !t.is_empty() {
-                            events.push(Event {
-                                ts,
-                                who: Some(Who::Assistant),
-                                text: t.to_string(),
-                            });
-                        }
-                    }
-                    Some("tool_use") if tools => events.push(Event {
-                        ts,
-                        who: None,
-                        text: tool_line(
-                            str_field(b, "name").unwrap_or("?"),
-                            b.get("input").unwrap_or(&Value::Null),
-                        ),
-                    }),
-                    _ => {}
-                }
-            }
-            continue;
-        }
-        // A person's line: not a tool result, not meta, not sent by the system.
-        if flag(&v, "isMeta")
-            || flag(&v, "isCompactSummary")
-            || flag(&v, "isVisibleInTranscriptOnly")
-            || str_field(&v, "promptSource") == Some("system")
-            || matches!(
-                str_field(&v, "turnOrigin"),
-                Some("task_notification" | "peer")
-            )
-        {
-            continue;
-        }
-        let Some(text) = human_text(&blocks_text(content)) else {
-            continue;
-        };
-        let who = if agent_file || flag(&v, "isSidechain") || sent_for_a_task(&text) {
-            Who::Task
-        } else {
-            Who::User
-        };
-        events.push(Event {
-            ts,
-            who: Some(who),
-            text,
-        });
+    lines::scan_from(
+        path,
+        from,
+        |_, _| true,
+        |_, line| claude_line(line, agent_file, tools, ex),
+    )
+}
+
+fn claude_line(line: &[u8], agent_file: bool, tools: bool, ex: &mut Extract) {
+    // Cheap skips: no text or tool call in the line, or a tool result with no text.
+    let holds_text = has(line, b"\"text\"") || has(line, b"\"content\":\"");
+    if !(holds_text || tools && has(line, b"\"tool_use\"")) {
+        return;
     }
-    let (sid, agent) = ids(path, inner.as_deref());
+    if has(line, b"\"type\":\"tool_result\"") && !has(line, b"\"type\":\"text\"") {
+        return;
+    }
+    let Ok(v) = serde_json::from_slice::<Value>(line) else {
+        return;
+    };
+    let kind = str_field(&v, "type");
+    if kind != Some("user") && kind != Some("assistant") {
+        return;
+    }
+    // Only a line with words in it says where the session worked and what it is called.
+    if holds_text {
+        if ex.cwd.is_none() {
+            ex.cwd = str_field(&v, "cwd").map(str::to_string);
+        }
+        if ex.inner.is_none() {
+            ex.inner = str_field(&v, "sessionId").map(str::to_string);
+        }
+    }
+    let Some(ts) = str_field(&v, "timestamp").and_then(time::parse_iso) else {
+        return;
+    };
+    if holds_text && let Some(c) = str_field(&v, "cwd") {
+        ex.cwd_lines.entry(c.to_string()).or_default().push(ts);
+    }
+    let Some(content) = v.pointer("/message/content") else {
+        return;
+    };
+    if kind == Some("assistant") {
+        if str_field(&v["message"], "model") == Some("<synthetic>") {
+            return;
+        }
+        let Some(blocks) = content.as_array() else {
+            return;
+        };
+        for b in blocks {
+            match str_field(b, "type") {
+                Some("text") => {
+                    let t = str_field(b, "text").unwrap_or("").trim();
+                    if !t.is_empty() {
+                        ex.events.push(Event {
+                            ts,
+                            who: Some(Who::Assistant),
+                            text: t.to_string(),
+                        });
+                    }
+                }
+                Some("tool_use") if tools => ex.events.push(Event {
+                    ts,
+                    who: None,
+                    text: tool_line(
+                        str_field(b, "name").unwrap_or("?"),
+                        b.get("input").unwrap_or(&Value::Null),
+                    ),
+                }),
+                _ => {}
+            }
+        }
+        return;
+    }
+    // A person's line: not a tool result, not meta, not sent by the system.
+    if flag(&v, "isMeta")
+        || flag(&v, "isCompactSummary")
+        || flag(&v, "isVisibleInTranscriptOnly")
+        || str_field(&v, "promptSource") == Some("system")
+        || matches!(
+            str_field(&v, "turnOrigin"),
+            Some("task_notification" | "peer")
+        )
+    {
+        return;
+    }
+    let Some(text) = human_text(&blocks_text(content)) else {
+        return;
+    };
+    let who = if agent_file || flag(&v, "isSidechain") || sent_for_a_task(&text) {
+        Who::Task
+    } else {
+        Who::User
+    };
+    ex.events.push(Event {
+        ts,
+        who: Some(who),
+        text,
+    });
+}
+
+/// The session an extract stands for, cut to the window.
+fn session_of(root: &Path, path: &Path, ex: Extract, f: &Filter) -> Session {
+    let (sid, agent) = ids(path, ex.inner.as_deref());
     let folder = load::folder_of(root, path);
-    Ok(Session {
+    let in_window = |ts: i64| ts >= f.since && ts < f.until;
+    let cwds = ex
+        .cwd_lines
+        .iter()
+        .filter_map(|(c, times)| {
+            let n = times.iter().filter(|&&t| in_window(t)).count();
+            (n > 0).then(|| (c.clone(), n as u32))
+        })
+        .collect();
+    Session {
         source: Source::Claude,
-        project: cwd
+        project: ex
+            .cwd
             .as_deref()
             .map(project_name)
             .unwrap_or_else(|| short_project(&folder)),
         sid,
         agent,
-        events,
+        events: ex.events.into_iter().filter(|e| in_window(e.ts)).collect(),
         cwds,
-    })
+    }
+}
+
+fn read_session(
+    root: &Path,
+    path: &Path,
+    f: &Filter,
+    need: Need,
+    pre: Option<&Prefilter>,
+    slot: Option<&Slot>,
+) -> io::Result<Session> {
+    let ex = cache::fetch(slot, path, need, pre, |from, ex, tools, _| {
+        read_lines(path, from, ex, tools)
+    })?;
+    Ok(session_of(root, path, ex, f))
 }
 
 fn project_matches(s: &Session, folder: &str, projects: &[String]) -> bool {
@@ -421,16 +457,27 @@ fn project_matches(s: &Session, folder: &str, projects: &[String]) -> bool {
 
 /// Every session in the window with something said in it. `--project` matches the
 /// folder name or the working directory shown, so it is checked after reading.
-pub fn load_sessions(root: &Path, f: &Filter, tools: bool) -> io::Result<Vec<Session>> {
+pub fn load_sessions(
+    root: &Path,
+    f: &Filter,
+    need: Need,
+    pre: Option<&Prefilter>,
+    cache: &Cache,
+) -> io::Result<Vec<Session>> {
     let wide = Filter {
         since: f.since,
         until: f.until,
         projects: Vec::new(),
         excludes: f.excludes.clone(),
     };
-    let files = load::select_files(root, &wide)?;
+    let all = load::all_files(root)?;
+    let slot = cache.slot("claude", root);
+    if let Some(s) = &slot {
+        s.sweep(&all);
+    }
+    let files = load::select_from(root, &all, &wide);
     let read = load::read_all(&files, |p| {
-        let s = read_session(root, p, &wide, tools).ok()?;
+        let s = read_session(root, p, &wide, need, pre, slot.as_ref()).ok()?;
         let keep =
             !s.events.is_empty() && project_matches(&s, &load::folder_of(root, p), &f.projects);
         keep.then_some(s)
@@ -469,8 +516,13 @@ pub fn session_files(root: &Path, f: &Filter, spec: &str) -> io::Result<Vec<std:
 }
 
 /// Reads one file as a session, tool calls included.
-pub fn load_one(root: &Path, path: &Path, f: &Filter) -> io::Result<Session> {
-    read_session(root, path, f, true)
+pub fn load_one(root: &Path, path: &Path, f: &Filter, cache: &Cache) -> io::Result<Session> {
+    let slot = cache.slot("claude", root);
+    let need = Need {
+        tools: true,
+        cwds: false,
+    };
+    read_session(root, path, f, need, None, slot.as_ref())
 }
 
 #[cfg(test)]
