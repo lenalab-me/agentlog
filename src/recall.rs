@@ -18,6 +18,8 @@ pub enum WhoFilter {
 
 pub struct SearchOpts {
     pub re: Regex,
+    /// A cheap test on a raw log line: lines it turns away cannot match `re`.
+    pub prefilter: Option<crate::needle::Prefilter>,
     pub who: WhoFilter,
     pub limit: usize,
 }
@@ -112,9 +114,10 @@ pub fn search(sessions: &[Session], o: &SearchOpts) -> (String, Vec<Value>, Opti
         let id = h.session.id();
         let _ = writeln!(
             out,
-            "{}  {:<9}  {:<idw$}  {}  | {}",
+            "{}  {:<9}  {:<6}  {:<idw$}  {}  | {}",
             time::minute(h.ts),
             h.who.name(),
+            h.session.source.name(),
             id,
             h.session.project,
             h.snippet
@@ -123,6 +126,7 @@ pub fn search(sessions: &[Session], o: &SearchOpts) -> (String, Vec<Value>, Opti
             "time": time::minute(h.ts),
             "timestamp": time::iso_utc(h.ts),
             "who": h.who.name(),
+            "source": h.session.source.name(),
             "id": id,
             "session": h.session.sid,
             "agent": h.session.agent,
@@ -214,8 +218,9 @@ pub fn show(s: &Session, o: &ShowOpts) -> Result<(String, Value), String> {
     let tools = s.events.len() - says.len();
     let _ = write!(
         out,
-        "# {}  {}  {} .. {}  ({} utterances, {tools} tool calls)",
+        "# {}  {}  {}  {} .. {}  ({} utterances, {tools} tool calls)",
         s.id(),
+        s.source.name(),
         s.project,
         time::minute(t0),
         time::minute(t1),
@@ -255,6 +260,7 @@ pub fn show(s: &Session, o: &ShowOpts) -> Result<(String, Value), String> {
         }
     }
     let json = json!({
+        "source": s.source.name(),
         "id": s.id(),
         "session": s.sid,
         "agent": s.agent,

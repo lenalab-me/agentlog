@@ -5,7 +5,9 @@ use std::path::PathBuf;
 
 use regex_lite::{Regex, RegexBuilder};
 
+use crate::codex;
 use crate::commands::{DailyOpts, Field, PRESETS, RepeatsOpts, Spec, ToolOpts, preset};
+use crate::needle::Prefilter;
 use crate::recall::{SearchOpts, ShowOpts, WhoFilter};
 use crate::time;
 
@@ -22,6 +24,23 @@ pub enum Cmd {
     Show(String, ShowOpts),
 }
 
+/// `--source`: which agents' logs `search` and `show` read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SourceSel {
+    Claude,
+    Codex,
+    All,
+}
+
+impl SourceSel {
+    pub fn claude(self) -> bool {
+        self != SourceSel::Codex
+    }
+    pub fn codex(self) -> bool {
+        self != SourceSel::Claude
+    }
+}
+
 pub struct Common {
     pub since: i64,
     pub until: i64,
@@ -29,6 +48,10 @@ pub struct Common {
     pub excludes: Vec<String>,
     pub root: PathBuf,
     pub json: bool,
+    pub source: SourceSel,
+    /// Where Codex's logs are. Unless given, the default places that exist.
+    pub codex_roots: Vec<PathBuf>,
+    pub codex_roots_given: bool,
 }
 
 pub struct Parsed {
@@ -78,7 +101,11 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         excludes: Vec::new(),
         root: PathBuf::from(format!("{home}/.claude/projects")),
         json: false,
+        source: SourceSel::All,
+        codex_roots: Vec::new(),
+        codex_roots_given: false,
     };
+    let mut source_given = false;
     let mut pos: Vec<String> = Vec::new();
     let mut top = 30;
     let mut examples = 0;
@@ -148,6 +175,23 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--exclude" => common.excludes.push(value(&mut it)?),
             "--include-self" => include_self = true,
             "--root" => common.root = PathBuf::from(value(&mut it)?),
+            "--codex-root" => {
+                common.codex_roots.push(PathBuf::from(value(&mut it)?));
+                common.codex_roots_given = true;
+            }
+            "--source" => {
+                source_given = true;
+                common.source = match value(&mut it)?.as_str() {
+                    "claude" => SourceSel::Claude,
+                    "codex" => SourceSel::Codex,
+                    "all" => SourceSel::All,
+                    v => {
+                        return Err(format!(
+                            "--source: expected claude, codex or all; got `{v}`"
+                        ));
+                    }
+                }
+            }
             "--top" => top = number("--top", &value(&mut it)?)?,
             "--examples" => examples = number("--examples", &value(&mut it)?)?,
             "-v" => examples = examples.max(3),
@@ -222,6 +266,17 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     }
     if common.since >= common.until {
         return Err("--since must be before --until".into());
+    }
+    if (source_given || common.codex_roots_given) && sub != "search" && sub != "show" {
+        return Err(format!(
+            "--source and --codex-root are for search and show; {sub} reads Claude Code's logs only"
+        ));
+    }
+    if !common.codex_roots_given {
+        common.codex_roots = codex::default_roots()
+            .into_iter()
+            .filter(|p| p.is_dir())
+            .collect();
     }
 
     let rest = &pos[1..];
@@ -308,7 +363,12 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 .case_insensitive(ignore_case)
                 .build()
                 .map_err(|e| format!("search: not a regex: {e}"))?;
-            Cmd::Search(SearchOpts { re, who, limit })
+            Cmd::Search(SearchOpts {
+                re,
+                who,
+                limit,
+                prefilter: Prefilter::new(pattern, ignore_case),
+            })
         }
         "show" => {
             let [session] = rest else {

@@ -2,8 +2,10 @@
 #![allow(clippy::large_enum_variant)]
 
 mod cli;
+mod codex;
 mod commands;
 mod load;
+mod needle;
 mod recall;
 mod sig;
 mod talk;
@@ -72,13 +74,43 @@ fn main() {
     }
 }
 
-fn unreadable(c: &cli::Common, e: std::io::Error) -> ! {
-    eprintln!("agentlog: cannot read {}: {e}", c.root.display());
+fn unreadable(what: impl std::fmt::Display, e: std::io::Error) -> ! {
+    eprintln!("agentlog: cannot read {what}: {e}");
     std::process::exit(3);
 }
 
+/// Codex's roots to read, or `None` to leave Codex out. Asked for alone, there must be
+/// some; beside Claude's, a machine without Codex logs is not an error.
+fn codex_roots(c: &cli::Common) -> Option<&[std::path::PathBuf]> {
+    if !c.source.codex() {
+        return None;
+    }
+    if c.codex_roots.is_empty() {
+        if c.source == cli::SourceSel::Codex {
+            eprintln!(
+                "agentlog: no Codex logs: ~/.codex/sessions does not exist (--codex-root DIR names where they are)"
+            );
+            std::process::exit(3);
+        }
+        return None;
+    }
+    Some(&c.codex_roots)
+}
+
 fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
-    let sessions = talk::load_sessions(&c.root, filter, false).unwrap_or_else(|e| unreadable(c, e));
+    let mut sessions = Vec::new();
+    if c.source.claude() {
+        sessions.extend(
+            talk::load_sessions(&c.root, filter, false)
+                .unwrap_or_else(|e| unreadable(c.root.display(), e)),
+        );
+    }
+    if let Some(roots) = codex_roots(c) {
+        sessions.extend(
+            codex::load_sessions(roots, filter, false, o.prefilter.as_ref())
+                .unwrap_or_else(|e| unreadable("the Codex logs", e)),
+        );
+    }
     let (text, hits, note) = recall::search(&sessions, o);
     if c.json {
         // One object per hit, so the output reads line by line; the note goes aside.
@@ -97,12 +129,25 @@ fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
 }
 
 fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts) {
-    let files = talk::session_files(&c.root, filter, spec).unwrap_or_else(|e| unreadable(c, e));
-    let mut sessions: Vec<talk::Session> = files
-        .iter()
-        .filter_map(|p| talk::load_one(&c.root, p, filter).ok())
-        .filter(|s| !s.events.is_empty())
-        .collect();
+    let mut sessions: Vec<talk::Session> = Vec::new();
+    if c.source.claude() {
+        let files = talk::session_files(&c.root, filter, spec)
+            .unwrap_or_else(|e| unreadable(c.root.display(), e));
+        sessions.extend(
+            files
+                .iter()
+                .filter_map(|p| talk::load_one(&c.root, p, filter).ok()),
+        );
+    }
+    // `SESSION/AGENT` names a Claude subagent; a Codex id has no slash.
+    if let Some(roots) = codex_roots(c)
+        && !spec.contains('/')
+    {
+        let files = codex::session_files(roots, filter, spec)
+            .unwrap_or_else(|e| unreadable("the Codex logs", e));
+        sessions.extend(files.iter().filter_map(|p| codex::load_one(p, filter).ok()));
+    }
+    sessions.retain(|s| !s.events.is_empty());
     if sessions.len() != 1 {
         if sessions.is_empty() {
             eprintln!(
@@ -116,7 +161,13 @@ fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts
             );
             for s in &sessions {
                 let first = s.events.first().map_or(0, |e| e.ts);
-                eprintln!("  {}  {}  {}", s.id(), time::minute(first), s.project);
+                eprintln!(
+                    "  {}  {}  {}  {}",
+                    s.id(),
+                    s.source.name(),
+                    time::minute(first),
+                    s.project
+                );
             }
         }
         std::process::exit(2);

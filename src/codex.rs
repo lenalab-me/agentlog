@@ -1,0 +1,587 @@
+//! Codex session logs (`~/.codex/sessions/YYYY/MM/DD/rollout-<local time>-<uuid>.jsonl` and
+//! `~/.codex/archived_sessions/`), read as the same `Session`s `talk.rs` makes from Claude
+//! Code's logs, for `search` and `show`.
+//!
+//! The logs are big (26 GB over 1,800 files, nearly all tool output), so a file is not read
+//! as JSON line by line. A line's first bytes say what it is (`"payload":{"type":"message"`);
+//! only messages (and, for `show`, tool calls) are parsed, and for `search` only the messages
+//! that pass `Prefilter`, the pattern's own literal looked for in the raw line.
+
+use std::collections::HashMap;
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use memchr::{memchr, memmem};
+use regex_lite::Regex;
+use serde_json::Value;
+
+use crate::load::{self, Filter};
+use crate::needle::Prefilter;
+use crate::talk::{self, Event, Session, Source, Who};
+use crate::time;
+
+/// Hours a file name's clock can be ahead of UTC (the name is the local time of the
+/// machine that wrote the log), plus an hour of slack.
+const NAME_SLACK: i64 = 15 * 3600;
+
+pub fn default_roots() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    ["sessions", "archived_sessions"]
+        .iter()
+        .map(|d| PathBuf::from(format!("{home}/.codex/{d}")))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------------------
+// Which files
+
+/// `rollout-2026-06-22T11-24-00-019eed24-4fae-7653-9a71-2b3b219b4dcd` → the session id.
+fn id_of(stem: &str) -> String {
+    let n = stem.chars().count();
+    if stem.starts_with("rollout-") && n >= 36 {
+        stem.chars().skip(n - 36).collect()
+    } else {
+        stem.to_string()
+    }
+}
+
+/// The time in the file name, read as UTC. It is the local time the session started.
+fn name_time(stem: &str) -> Option<i64> {
+    let ts = stem.strip_prefix("rollout-")?.get(..19)?;
+    let (date, clock) = ts.split_once('T')?;
+    time::parse_iso(&format!("{date}T{}Z", clock.replace('-', ":")))
+}
+
+fn stem_of(p: &Path) -> String {
+    p.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The files the window and the filters leave. One session may sit in several places
+/// (`sessions/` and `archived_sessions/`, a live directory and its copy): the largest
+/// file of an id is read, the first listed when sizes are equal.
+pub fn select_files(roots: &[PathBuf], f: &Filter) -> io::Result<Vec<PathBuf>> {
+    let mut all = Vec::new();
+    for r in roots {
+        fs::read_dir(r).map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", r.display())))?;
+        load::jsonl_files(r, &mut all);
+    }
+    let mut best: HashMap<String, (u64, PathBuf)> = HashMap::new();
+    for p in all {
+        let s = p.to_string_lossy();
+        if f.excludes.iter().any(|x| s.contains(x.as_str())) {
+            continue;
+        }
+        let stem = stem_of(&p);
+        // Events are never earlier than the session's start, and never later than the
+        // file's last write.
+        if load::mtime(&p) < f.since {
+            continue;
+        }
+        if name_time(&stem).is_some_and(|t| t - NAME_SLACK >= f.until) {
+            continue;
+        }
+        let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        let e = best.entry(id_of(&stem)).or_insert((size, p.clone()));
+        if size > e.0 {
+            *e = (size, p);
+        }
+    }
+    let mut files: Vec<PathBuf> = best.into_values().map(|(_, p)| p).collect();
+    files.sort();
+    Ok(files)
+}
+
+/// The files a `show SESSION` may mean: those whose id contains `spec`.
+pub fn session_files(roots: &[PathBuf], f: &Filter, spec: &str) -> io::Result<Vec<PathBuf>> {
+    let want = spec.to_lowercase();
+    Ok(select_files(roots, f)?
+        .into_iter()
+        .filter(|p| id_of(&stem_of(p)).to_lowercase().contains(&want))
+        .collect())
+}
+
+// ---------------------------------------------------------------------------------------
+// Reading lines without reading them all
+
+const CHUNK: usize = 4 << 20;
+/// How much of a line's start `want` sees.
+const HEAD: usize = 256;
+
+/// Calls `on_line(number, line)` for each line `want(number, first bytes)` accepts. A line
+/// that is not accepted is passed over without being kept, however long it is.
+fn scan(
+    path: &Path,
+    want: impl Fn(usize, &[u8]) -> bool,
+    mut on_line: impl FnMut(usize, &[u8]),
+) -> io::Result<()> {
+    let mut file = fs::File::open(path)?;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut n = 0usize;
+    let mut skipping = false;
+    let head = |b: &[u8]| b.len().min(HEAD);
+    loop {
+        let got = (&mut file).take(CHUNK as u64).read_to_end(&mut buf)?;
+        let mut pos = 0;
+        while let Some(i) = memchr(b'\n', &buf[pos..]) {
+            let line = &buf[pos..pos + i];
+            if skipping {
+                skipping = false;
+            } else if want(n, &line[..head(line)]) {
+                on_line(n, line);
+            }
+            n += 1;
+            pos += i + 1;
+        }
+        buf.drain(..pos);
+        if got == 0 {
+            // The last line has no newline (a half-written one is rejected when parsed).
+            if !skipping && !buf.is_empty() && want(n, &buf[..head(&buf)]) {
+                on_line(n, &buf);
+            }
+            return Ok(());
+        }
+        if skipping || (buf.len() >= HEAD && !want(n, &buf[..HEAD])) {
+            skipping = true;
+            buf.clear();
+        }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum Kind {
+    Message,
+    Call,
+    Other,
+}
+
+/// What a line is, from its first bytes: `…,"type":"response_item","payload":{"type":"message"…`.
+fn kind(head: &[u8]) -> Kind {
+    const KEY: &[u8] = b"\"type\":\"response_item\",\"payload\":{\"type\":\"";
+    let Some(i) = memmem::find(head, KEY) else {
+        return Kind::Other;
+    };
+    let rest = &head[i + KEY.len()..];
+    if rest.starts_with(b"message\"") {
+        Kind::Message
+    } else if rest.starts_with(b"function_call\"") || rest.starts_with(b"custom_tool_call\"") {
+        Kind::Call
+    } else {
+        Kind::Other
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// What a person said
+
+/// Blocks the harness puts inside a user message, with or without attributes. Removed
+/// wherever they sit.
+const INJECTED: &[&str] = &[
+    "in-app-browser-context",
+    "environment_context",
+    "recommended_plugins",
+    "subagent_notification",
+    "turn_aborted",
+    "codex_internal_context",
+    "heartbeat",
+    "skill",
+    "realtime_delegation",
+    "external_codex_apps_open_page",
+    "image",
+];
+
+/// A text block that starts like this was written by the harness, not typed.
+const INJECTED_STARTS: &[&str] = &[
+    "# AGENTS.md instructions",
+    "<INSTRUCTIONS>",
+    "Here is a list of plugins",
+    "# In app browser:",
+    "[User attached one or more files",
+    "[coordinator] ",
+    "[oracle-completion:",
+    "The next image shows the browser",
+    "<image",
+    "</image>",
+];
+
+/// The attachment list and the IDE context come first; what was typed follows this line
+/// (`## My request:` in logs written by the phone app).
+fn request_marker() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"## My request(?: for Codex)?:").unwrap())
+}
+
+/// Prompts another program sent in the user's place.
+const SENT_STARTS: &[&str] = &["You are working inside Orca"];
+
+fn injected_blocks() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        let alts: Vec<String> = INJECTED
+            .iter()
+            .map(|t| format!(r"<{t}(?:\s[^>]*)?>.*?</{t}>"))
+            .collect();
+        Regex::new(&format!("(?s){}", alts.join("|"))).unwrap()
+    })
+}
+
+fn answer_blocks() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new("(?s)<send_user_message_question_reply>(.*?)</send_user_message_question_reply>")
+            .unwrap()
+    })
+}
+
+/// The answers a person gave to the assistant's questions (the app writes them as a
+/// block of JSON), in place of the block.
+fn answers(text: &str) -> (String, Vec<String>) {
+    let mut given = Vec::new();
+    for c in answer_blocks().captures_iter(text) {
+        if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(c[1].trim()) {
+            given.extend(
+                items
+                    .iter()
+                    .filter_map(|i| i.get("answer").and_then(Value::as_str))
+                    .map(str::to_string),
+            );
+        }
+    }
+    (answer_blocks().replace_all(text, "").into_owned(), given)
+}
+
+/// The part of a user message a person typed, or `None` if there is none. A message is
+/// several text blocks; the harness's blocks are separate from the typed one.
+pub fn human_text(blocks: &[&str]) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for b in blocks {
+        let (rest, given) = answers(b);
+        parts.extend(given);
+        let rest = injected_blocks().replace_all(&rest, "");
+        let t = rest.trim();
+        if t.is_empty() || INJECTED_STARTS.iter().any(|p| t.starts_with(p)) {
+            continue;
+        }
+        let t = match request_marker().find(t) {
+            Some(m) => t[m.end()..].trim(),
+            // An attachment list with nothing typed after it.
+            None if t.starts_with("# Files mentioned by the user:") => continue,
+            None => t,
+        };
+        if !t.is_empty() {
+            parts.push(t.to_string());
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
+// ---------------------------------------------------------------------------------------
+// Reading a session
+
+fn str_field<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+    v.get(k).and_then(Value::as_str)
+}
+
+/// The text blocks of a message's content (`input_text` / `output_text`).
+fn texts(content: &Value) -> Vec<&str> {
+    content
+        .as_array()
+        .map(|a| a.iter().filter_map(|b| str_field(b, "text")).collect())
+        .unwrap_or_default()
+}
+
+/// `[exec_command] first line of the command…` for a `function_call` (arguments are a JSON
+/// string) or a `custom_tool_call` (the input is the code or the patch). Results are never
+/// shown.
+fn call_line(p: &Value) -> String {
+    let name = str_field(p, "name").unwrap_or("?");
+    let detail = if let Some(input) = str_field(p, "input") {
+        if name == "apply_patch" {
+            input
+                .lines()
+                .find(|l| l.starts_with("*** ") && l.contains(" File: "))
+                .unwrap_or("")
+                .trim_start_matches("*** ")
+                .to_string()
+        } else if name == "exec"
+            && let Some(c) = exec_cmd().captures(input)
+        {
+            // The code-mode tool wraps the shell command: `tools.exec_command({cmd: "ls"})`.
+            return talk::note("exec_command", &c[1]);
+        } else {
+            input.to_string()
+        }
+    } else {
+        let args: Value = str_field(p, "arguments")
+            .and_then(|a| serde_json::from_str(a).ok())
+            .unwrap_or(Value::Null);
+        [
+            "cmd",
+            "command",
+            "path",
+            "file_path",
+            "query",
+            "pattern",
+            "url",
+        ]
+        .iter()
+        .find_map(|k| match args.get(*k) {
+            Some(Value::String(s)) => Some(s.clone()),
+            // The older shell tool: ["bash", "-lc", "the command"].
+            Some(Value::Array(a)) => a.last().and_then(Value::as_str).map(str::to_string),
+            _ => None,
+        })
+        .unwrap_or_default()
+    };
+    talk::note(name, &detail)
+}
+
+fn exec_cmd() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"exec_command\(\{\s*cmd\s*:\s*["'`]([^"'`\n]*)"#).unwrap())
+}
+
+struct Reader<'a> {
+    f: &'a Filter,
+    tools: bool,
+    pre: Option<&'a Prefilter>,
+    events: Vec<Event>,
+    cwd: Option<String>,
+    /// A subagent's file starts with a copy of its parent's lines, up to this ordinal.
+    own_from: u64,
+    /// A subagent's user lines are the parent's prompts, not a person's words.
+    subagent: bool,
+}
+
+impl Reader<'_> {
+    fn line(&mut self, n: usize, line: &[u8]) {
+        if n == 0
+            && memmem::find(&line[..line.len().min(HEAD)], b"\"type\":\"session_meta\"").is_some()
+        {
+            self.meta(line);
+            return;
+        }
+        let kind = kind(&line[..line.len().min(HEAD)]);
+        if kind == Kind::Other {
+            return;
+        }
+        let is_message = kind == Kind::Message;
+        if is_message
+            && let Some(p) = self.pre
+            && !p.may_match(line)
+        {
+            return;
+        }
+        // A line that is not JSON (half written, damaged) is passed over.
+        let Ok(v) = serde_json::from_slice::<Value>(line) else {
+            return;
+        };
+        if v.get("ordinal")
+            .and_then(Value::as_u64)
+            .is_some_and(|o| o < self.own_from)
+        {
+            return;
+        }
+        let Some(ts) = str_field(&v, "timestamp").and_then(time::parse_iso) else {
+            return;
+        };
+        if ts < self.f.since || ts >= self.f.until {
+            return;
+        }
+        let Some(p) = v.get("payload") else { return };
+        if !is_message {
+            self.events.push(Event {
+                ts,
+                who: None,
+                text: call_line(p),
+            });
+            return;
+        }
+        let content = p.get("content").unwrap_or(&Value::Null);
+        match str_field(p, "role") {
+            Some("assistant") => {
+                let text = texts(content).join("\n");
+                let text = text.trim();
+                if !text.is_empty() {
+                    self.events.push(Event {
+                        ts,
+                        who: Some(Who::Assistant),
+                        text: text.to_string(),
+                    });
+                }
+            }
+            Some("user") => {
+                let Some(text) = human_text(&texts(content)) else {
+                    return;
+                };
+                let who = if self.subagent
+                    || talk::sent_for_a_task(&text)
+                    || SENT_STARTS.iter().any(|p| text.starts_with(p))
+                {
+                    Who::Task
+                } else {
+                    Who::User
+                };
+                self.events.push(Event {
+                    ts,
+                    who: Some(who),
+                    text,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn meta(&mut self, line: &[u8]) {
+        let Ok(v) = serde_json::from_slice::<Value>(line) else {
+            return;
+        };
+        let Some(p) = v.get("payload") else { return };
+        self.cwd = str_field(p, "cwd").map(str::to_string);
+        self.own_from = p
+            .get("subagent_history_start_ordinal")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        self.subagent = p.pointer("/source/subagent").is_some()
+            || p.get("parent_thread_id").is_some()
+            || str_field(p, "thread_source") == Some("subagent");
+    }
+}
+
+fn read_session(
+    path: &Path,
+    f: &Filter,
+    tools: bool,
+    pre: Option<&Prefilter>,
+) -> io::Result<Session> {
+    let mut r = Reader {
+        f,
+        tools,
+        pre,
+        events: Vec::new(),
+        cwd: None,
+        own_from: 0,
+        subagent: false,
+    };
+    let tools = r.tools;
+    scan(
+        path,
+        |n, head| {
+            n == 0 || matches!(kind(head), Kind::Message) || tools && kind(head) == Kind::Call
+        },
+        |n, line| r.line(n, line),
+    )?;
+    Ok(Session {
+        source: Source::Codex,
+        project: r
+            .cwd
+            .as_deref()
+            .map(talk::project_name)
+            .unwrap_or_else(|| "?".into()),
+        sid: id_of(&stem_of(path)),
+        agent: None,
+        events: r.events,
+    })
+}
+
+/// Every session in the window with something said in it. With `pre`, only the messages
+/// that may match are kept (all `search` looks at).
+pub fn load_sessions(
+    roots: &[PathBuf],
+    f: &Filter,
+    tools: bool,
+    pre: Option<&Prefilter>,
+) -> io::Result<Vec<Session>> {
+    let files = select_files(roots, f)?;
+    let read = load::read_all(&files, |p| {
+        let s = read_session(p, f, tools, pre).ok()?;
+        let keep = !s.events.is_empty()
+            && (f.projects.is_empty() || f.projects.iter().any(|x| s.project.contains(x.as_str())));
+        keep.then_some(s)
+    });
+    Ok(read.into_iter().map(|(_, s)| s).collect())
+}
+
+/// Reads one file as a session, tool calls included.
+pub fn load_one(path: &Path, f: &Filter) -> io::Result<Session> {
+    read_session(path, f, true, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_text_survives_and_what_the_app_adds_does_not() {
+        assert_eq!(
+            human_text(&["do the thing"]).as_deref(),
+            Some("do the thing")
+        );
+        assert_eq!(
+            human_text(&[
+                "# AGENTS.md instructions for /x\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>",
+                "<environment_context>\n  <cwd>/x</cwd>\n</environment_context>",
+            ]),
+            None
+        );
+        // Blocks apart from the typed one, and a block with the tag and the words together.
+        let got = human_text(&[
+            "<in-app-browser-context source=\"ambient\">\nopen tabs\n</in-app-browser-context>",
+            "# In app browser:\n- The user has the in-app browser open",
+            "what I typed\n<turn_aborted>\nThe user interrupted\n</turn_aborted>",
+            "<image name=[Image #1]>",
+            "</image>",
+        ]);
+        assert_eq!(got.as_deref(), Some("what I typed"));
+    }
+
+    #[test]
+    fn the_request_after_an_attachment_list_is_what_was_typed() {
+        let raw = "# Files mentioned by the user:\n\n## a.png: /tmp/a.png\n\n## My request for Codex:\n\nlook at this";
+        assert_eq!(human_text(&[raw]).as_deref(), Some("look at this"));
+        let phone = "# Files mentioned by the user:\n\n## Photo 1.jpg: /tmp/p.jpg\n\n## My request:\nlook at that";
+        assert_eq!(human_text(&[phone]).as_deref(), Some("look at that"));
+        assert_eq!(
+            human_text(&["# Files mentioned by the user:\n\n## a.png: /tmp/a.png"]),
+            None
+        );
+        let none = "# Files mentioned by the user:\n\n## a.png: /tmp/a.png\n\n## My request for Codex:\n\n";
+        assert_eq!(human_text(&[none]), None);
+    }
+
+    #[test]
+    fn an_answer_to_a_question_is_the_persons_but_the_question_is_not() {
+        let raw = "<send_user_message_question_reply>\n[{\"questionItemId\":\"q\",\"question\":\"Which?\",\"answer\":\"the first one\"}]\n</send_user_message_question_reply>";
+        assert_eq!(human_text(&[raw]).as_deref(), Some("the first one"));
+        assert_eq!(
+            human_text(&[
+                "<send_user_message_question_reply>not json</send_user_message_question_reply>"
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn ids_and_times_come_from_the_file_name() {
+        let stem = "rollout-2026-06-22T11-24-00-019eed24-4fae-7653-9a71-2b3b219b4dcd";
+        assert_eq!(id_of(stem), "019eed24-4fae-7653-9a71-2b3b219b4dcd");
+        assert_eq!(name_time(stem), time::parse_iso("2026-06-22T11:24:00Z"));
+        assert_eq!(id_of("odd-name"), "odd-name");
+        assert_eq!(name_time("odd-name"), None);
+    }
+
+    #[test]
+    fn a_line_is_known_by_its_first_bytes() {
+        let m = br#"{"timestamp":"2026-06-22T02:24:13.083Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"user""#;
+        assert!(kind(m) == Kind::Message);
+        let c = br#"{"timestamp":"t","ordinal":3,"type":"response_item","payload":{"type":"function_call","name":"x""#;
+        assert!(kind(c) == Kind::Call);
+        let o = br#"{"timestamp":"t","ordinal":3,"type":"response_item","payload":{"type":"function_call_output","call_id":"x""#;
+        assert!(kind(o) == Kind::Other);
+        let e = br#"{"timestamp":"t","ordinal":3,"type":"event_msg","payload":{"type":"message""#;
+        assert!(kind(e) == Kind::Other);
+    }
+}

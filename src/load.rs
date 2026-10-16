@@ -62,7 +62,7 @@ pub fn clip(s: &str) -> String {
     s[..end].to_string()
 }
 
-fn jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
+pub fn jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -78,7 +78,7 @@ fn jsonl_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn mtime(p: &Path) -> i64 {
+pub fn mtime(p: &Path) -> i64 {
     fs::metadata(p)
         .and_then(|m| m.modified())
         .ok()

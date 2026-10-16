@@ -64,6 +64,8 @@ fn run(root: &Path, args: &[&str]) -> (i32, String, String) {
         .args(args)
         .args(["--root", root.to_str().unwrap()])
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        // No Codex logs of the real machine: its default places live under HOME.
+        .env("HOME", "/nonexistent-home")
         .output()
         .unwrap();
     (
@@ -659,7 +661,7 @@ fn show_prints_the_talk_with_tools_as_one_line_and_no_results() {
         !out.contains("RESULT") && !out.contains("second line"),
         "{out}"
     );
-    assert!(out.starts_with("# aaaaaaaa  net/designer"), "{out}");
+    assert!(out.starts_with("# aaaaaaaa  claude  net/designer"), "{out}");
 }
 
 #[test]
@@ -728,4 +730,505 @@ fn show_needs_a_unique_session() {
     let (code, _, err) = show(d.path(), &["ffff"]);
     assert_eq!(code, 2);
     assert!(err.contains("no session starts with `ffff`"), "{err}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Codex logs: written line by line in the order Codex writes the keys (the reader tells a
+// line's kind from its first bytes), with made-up words
+
+fn cx_line(ord: u32, ts: &str, kind: &str, payload: &str) -> String {
+    format!(r#"{{"timestamp":"{ts}","ordinal":{ord},"type":"{kind}","payload":{payload}}}"#)
+}
+
+fn cx_meta(sid: &str, ts: &str, cwd: &str, extra: &str) -> String {
+    let payload = format!(r#"{{"id":"{sid}","cwd":"{cwd}","originator":"Codex Desktop"{extra}}}"#);
+    cx_line(0, ts, "session_meta", &payload)
+}
+
+fn cx_msg(ord: u32, ts: &str, role: &str, blocks: &[&str]) -> String {
+    let kind = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
+    let content: Vec<String> = blocks
+        .iter()
+        .map(|t| json!({"type": kind, "text": t}).to_string())
+        .collect();
+    cx_line(
+        ord,
+        ts,
+        "response_item",
+        &format!(
+            r#"{{"type":"message","role":"{role}","content":[{}]}}"#,
+            content.join(",")
+        ),
+    )
+}
+
+/// A payload whose `type` comes first, as Codex writes it, then the fields of `rest`.
+fn cx_typed(ord: u32, ts: &str, kind: &str, ptype: &str, rest: &Value) -> String {
+    let body = rest.to_string();
+    cx_line(
+        ord,
+        ts,
+        kind,
+        &format!(r#"{{"type":"{ptype}",{}"#, &body[1..]),
+    )
+}
+
+fn cx_call(ord: u32, ts: &str, name: &str, args: &Value) -> String {
+    let rest = json!({"name": name, "arguments": args.to_string(), "call_id": "c1"});
+    cx_typed(ord, ts, "response_item", "function_call", &rest)
+}
+
+fn cx_custom(ord: u32, ts: &str, name: &str, input: &str) -> String {
+    let rest = json!({"name": name, "input": input});
+    cx_typed(ord, ts, "response_item", "custom_tool_call", &rest)
+}
+
+fn cx_other(ord: u32, ts: &str, kind: &str, ptype: &str, text: &str) -> String {
+    let rest = json!({"output": text, "text": text, "message": text});
+    cx_typed(ord, ts, kind, ptype, &rest)
+}
+
+fn write_raw(path: &Path, lines: &[String]) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let out: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    fs::write(path, out).unwrap();
+}
+
+fn cx_file(codex: &Path, dir: &str, local: &str, sid: &str) -> std::path::PathBuf {
+    codex.join(dir).join(format!("rollout-{local}-{sid}.jsonl"))
+}
+
+/// `agentlog <args> --source codex` over the two Codex places under `codex`.
+fn cx(codex: &Path, args: &[&str]) -> (i32, String, String) {
+    for d in ["sessions", "archived_sessions"] {
+        fs::create_dir_all(codex.join(d)).unwrap();
+    }
+    let (a, b) = (
+        codex.join("sessions").to_str().unwrap().to_string(),
+        codex
+            .join("archived_sessions")
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    let mut all: Vec<&str> = args.to_vec();
+    all.extend(["--source", "codex", "--codex-root", &a, "--codex-root", &b]);
+    run(&codex.join("no-claude"), &all)
+}
+
+fn cx_hits(codex: &Path, args: &[&str]) -> Vec<Value> {
+    let mut a = vec!["search"];
+    a.extend(args);
+    a.push("--json");
+    let (code, out, err) = cx(codex, &a);
+    assert_eq!(code, 0, "stderr: {err}");
+    out.lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
+        .collect()
+}
+
+fn snippets(h: &[Value]) -> Vec<&str> {
+    h.iter().map(|h| h["snippet"].as_str().unwrap()).collect()
+}
+
+const CX1: &str = "019f0000-aaaa-7000-8000-00000000c001";
+const CX_CWD: &str = "/Users/tester/project/prod/net/designer";
+const CX_DAY: &str = "sessions/2026/10/02";
+const CX_LOCAL: &str = "2026-10-02T14-00-00";
+
+#[test]
+fn codex_search_reads_only_what_was_said() {
+    let d = tempfile::tempdir().unwrap();
+    let t = |s: u32| format!("2026-10-02T05:{s:02}:00.123Z");
+    let mut lines = vec![
+        cx_meta(CX1, &t(0), CX_CWD, ""),
+        cx_msg(1, &t(1), "developer", &["ZEBRA developer rules"]),
+        cx_msg(
+            2,
+            &t(2),
+            "user",
+            &[
+                "<in-app-browser-context source=\"ambient\">\nZEBRA tabs\n</in-app-browser-context>",
+                "ZEBRA typed by a person",
+            ],
+        ),
+        cx_msg(
+            3,
+            &t(3),
+            "user",
+            &[
+                "<environment_context>\n  <cwd>ZEBRA</cwd>\n</environment_context>",
+                "# AGENTS.md instructions for /x\n\n<INSTRUCTIONS>\nZEBRA rules\n</INSTRUCTIONS>",
+                "<recommended_plugins>\nHere is a list of plugins ZEBRA\n</recommended_plugins>",
+                "<subagent_notification>\n{\"note\":\"ZEBRA\"}\n</subagent_notification>",
+                "<turn_aborted>\nThe user interrupted ZEBRA\n</turn_aborted>",
+                "<image name=[Image #1] path=\"/tmp/ZEBRA.png\">",
+                "</image>",
+            ],
+        ),
+        cx_msg(
+            4,
+            &t(4),
+            "user",
+            &[
+                "# Files mentioned by the user:\n\n## a.png: /tmp/a.png\n\n## My request for Codex:\n\nZEBRA with an attachment",
+            ],
+        ),
+        cx_msg(5, &t(5), "assistant", &["I will handle the ZEBRA"]),
+        cx_other(6, &t(6), "response_item", "reasoning", "ZEBRA in thought"),
+        cx_call(7, &t(7), "exec_command", &json!({"cmd": "echo ZEBRA"})),
+        cx_other(
+            8,
+            &t(8),
+            "response_item",
+            "function_call_output",
+            "ZEBRA output",
+        ),
+        cx_other(9, &t(9), "event_msg", "user_message", "ZEBRA again"),
+    ];
+    // A damaged line in the middle must not stop the file, and a half-written last line
+    // is only passed over.
+    lines.push(r#"{"timestamp":"2026-10-02T05:10:00.000Z","ordinal":10,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"ZEBRA broken"#.to_string());
+    lines.push(cx_msg(11, &t(11), "user", &["ZEBRA after the damage"]));
+    let mut raw: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    raw.push_str(r#"{"timestamp":"2026-10-02T05:12:00.000Z","ordinal":12,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"ZEBRA cut"#);
+    let path = cx_file(d.path(), CX_DAY, CX_LOCAL, CX1);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, raw).unwrap();
+
+    let all = cx_hits(d.path(), &["ZEBRA"]);
+    assert_eq!(
+        snippets(&all),
+        [
+            "ZEBRA typed by a person",
+            "ZEBRA with an attachment",
+            "I will handle the ZEBRA",
+            "ZEBRA after the damage"
+        ]
+    );
+    assert_eq!(all[0]["source"], "codex");
+    assert_eq!(all[0]["id"], "0000c001", "the last 8 characters");
+    assert_eq!(all[0]["session"], CX1);
+    assert_eq!(all[0]["project"], "net/designer");
+    assert_eq!(all[0]["timestamp"], "2026-10-02T05:02:00Z");
+    assert_eq!(cx_hits(d.path(), &["ZEBRA", "--who", "assistant"]).len(), 1);
+    assert_eq!(
+        cx_hits(d.path(), &["ZEBRA", "--project", "designer"]).len(),
+        4
+    );
+    assert_eq!(
+        cx_hits(d.path(), &["ZEBRA", "--project", "elsewhere"]).len(),
+        0
+    );
+}
+
+#[test]
+fn codex_search_finds_what_the_log_writes_differently() {
+    // In a log line a newline is `\n`, a quote `\"`, a tab `\t`: a pattern that meets any of
+    // them, or counts characters, must not be turned away by the quick look at the raw line.
+    let d = tempfile::tempdir().unwrap();
+    let t = |s: u32| format!("2026-10-02T05:{s:02}:00.000Z");
+    let lines = [
+        cx_meta(CX1, &t(0), CX_CWD, ""),
+        cx_msg(1, &t(1), "user", &["first line\nsecond line"]),
+        cx_msg(2, &t(2), "user", &["she said \"hello there\" twice"]),
+        cx_msg(3, &t(3), "user", &["column\tseparated"]),
+        cx_msg(4, &t(4), "user", &["Mixed CASE Word"]),
+        cx_msg(5, &t(5), "user", &["疎にしすぎると困る"]),
+        cx_msg(6, &t(6), "user", &["a\\b path"]),
+    ];
+    write_raw(&cx_file(d.path(), CX_DAY, CX_LOCAL, CX1), &lines);
+    let n = |args: &[&str]| cx_hits(d.path(), args).len();
+    assert_eq!(n(&[r"first\s+line\s+second"]), 1);
+    assert_eq!(n(&["first line.second"]), 0, "`.` does not match a newline");
+    assert_eq!(n(&["said \"hello there\" twice"]), 1);
+    assert_eq!(n(&["said .hello"]), 1);
+    assert_eq!(n(&[r"column\sseparated"]), 1);
+    assert_eq!(n(&["mixed case", "-i"]), 1);
+    assert_eq!(n(&["mixed case"]), 0);
+    assert_eq!(n(&["(?i)mixed case"]), 1);
+    assert_eq!(n(&["疎にしすぎ"]), 1);
+    assert_eq!(n(&["nothing-like-this|Word"]), 1);
+    assert_eq!(n(&[r"a\\b"]), 1);
+    assert_eq!(n(&[r"\d+"]), 0);
+    assert_eq!(n(&["second line$"]), 1);
+}
+
+#[test]
+fn a_codex_session_in_two_places_is_read_once_from_the_larger_file() {
+    let t = |s: u32| format!("2026-10-02T05:{s:02}:00.000Z");
+    let small = [
+        cx_meta(CX1, &t(0), CX_CWD, ""),
+        cx_msg(1, &t(1), "user", &["twin: first"]),
+    ];
+    let large = [
+        cx_meta(CX1, &t(0), CX_CWD, ""),
+        cx_msg(1, &t(1), "user", &["twin: first"]),
+        cx_msg(2, &t(2), "assistant", &["twin: second"]),
+    ];
+    // The larger one in either place.
+    for (in_sessions, in_archive) in [(&small[..], &large[..]), (&large[..], &small[..])] {
+        let d = tempfile::tempdir().unwrap();
+        write_raw(&cx_file(d.path(), CX_DAY, CX_LOCAL, CX1), in_sessions);
+        write_raw(
+            &cx_file(d.path(), "archived_sessions", CX_LOCAL, CX1),
+            in_archive,
+        );
+        let got = cx_hits(d.path(), &["twin"]);
+        assert_eq!(snippets(&got), ["twin: first", "twin: second"]);
+        let (code, out, err) = cx(d.path(), &["show", "0000c001"]);
+        assert_eq!(code, 0, "one session, not two: {err}");
+        assert!(out.contains("(2 utterances"), "{out}");
+    }
+}
+
+#[test]
+fn a_codex_session_is_named_by_the_end_of_its_id_and_show_takes_any_part() {
+    let d = tempfile::tempdir().unwrap();
+    let (a, b) = (
+        "019f0000-aaaa-7000-8000-0000aaaa1111",
+        "019f0000-aaaa-7000-8000-0000bbbb2222",
+    );
+    for (sid, word) in [(a, "alpha"), (b, "beta")] {
+        write_raw(
+            &cx_file(d.path(), CX_DAY, CX_LOCAL, sid),
+            &[
+                cx_meta(sid, "2026-10-02T05:00:00.000Z", CX_CWD, ""),
+                cx_msg(
+                    1,
+                    "2026-10-02T05:01:00.000Z",
+                    "user",
+                    &[&format!("a {word} talk")],
+                ),
+            ],
+        );
+    }
+    let got = cx_hits(d.path(), &["talk"]);
+    let ids: Vec<&str> = got.iter().map(|h| h["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        ["aaaa1111", "bbbb2222"],
+        "the first 8 characters are shared"
+    );
+    // The end, a part from the middle, and the whole id.
+    for spec in ["aaaa1111", "8000-0000aaaa", a] {
+        let (code, out, err) = cx(d.path(), &["show", spec]);
+        assert_eq!(code, 0, "{spec}: {err}");
+        assert!(out.starts_with("# aaaa1111  codex  net/designer"), "{out}");
+        assert!(
+            out.contains("a alpha talk") && !out.contains("beta"),
+            "{out}"
+        );
+    }
+    // The shared start fits both: they are listed, as for Claude.
+    let (code, _, err) = cx(d.path(), &["show", "019f0000"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("fits 2 sessions"), "{err}");
+    assert!(
+        err.contains("aaaa1111  codex") && err.contains("bbbb2222  codex"),
+        "{err}"
+    );
+}
+
+#[test]
+fn codex_show_lists_calls_in_a_line_and_leaves_out_a_copied_history() {
+    let d = tempfile::tempdir().unwrap();
+    let parent = "019f0000-aaaa-7000-8000-00000000c0aa";
+    let t = |s: u32| format!("2026-10-02T05:{s:02}:00.000Z");
+    // A forked subagent's file starts with its parent's lines (ordinals below 3).
+    let extra = format!(
+        r#","parent_thread_id":"{parent}","subagent_history_start_ordinal":3,"source":{{"subagent":{{"thread_spawn":{{"parent_thread_id":"{parent}"}}}}}}"#
+    );
+    let lines = [
+        cx_meta(CX1, &t(0), CX_CWD, &extra),
+        cx_msg(1, &t(1), "user", &["copied question from the parent"]),
+        cx_msg(2, &t(2), "assistant", &["copied answer from the parent"]),
+        cx_msg(3, &t(3), "user", &["own task: check the ports"]),
+        cx_call(
+            4,
+            &t(4),
+            "exec_command",
+            &json!({"cmd": "ls dir\nsecond line"}),
+        ),
+        cx_other(
+            5,
+            &t(5),
+            "response_item",
+            "function_call_output",
+            "RESULT text",
+        ),
+        cx_custom(
+            6,
+            &t(6),
+            "apply_patch",
+            "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** End Patch",
+        ),
+        cx_custom(
+            7,
+            &t(7),
+            "exec",
+            "const r = await tools.exec_command({cmd: \"git status\", workdir: \"/x\"});\ntext(r)",
+        ),
+        cx_call(
+            8,
+            &t(8),
+            "shell",
+            &json!({"command": ["bash", "-lc", "pwd"]}),
+        ),
+        cx_msg(9, &t(9), "assistant", &["checked"]),
+    ];
+    write_raw(&cx_file(d.path(), CX_DAY, CX_LOCAL, CX1), &lines);
+    let (code, out, err) = cx(d.path(), &["show", "c001"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("own task: check the ports") && out.contains("checked"),
+        "{out}"
+    );
+    assert!(!out.contains("copied"), "{out}");
+    assert!(out.contains("  [exec_command] ls dir…"), "{out}");
+    assert!(
+        out.contains("  [apply_patch] Update File: src/a.rs"),
+        "{out}"
+    );
+    assert!(out.contains("  [exec_command] git status"), "{out}");
+    assert!(out.contains("  [shell] pwd"), "{out}");
+    assert!(
+        !out.contains("RESULT") && !out.contains("second line"),
+        "{out}"
+    );
+    assert!(out.contains("(2 utterances, 4 tool calls)"), "{out}");
+    // A subagent's prompt is the parent's, not the user's.
+    let any = cx_hits(d.path(), &["task", "--who", "any"]);
+    assert_eq!(any.len(), 1);
+    assert_eq!(any[0]["who"], "task");
+    assert_eq!(cx_hits(d.path(), &["task", "--who", "user"]).len(), 0);
+}
+
+#[test]
+fn source_picks_the_logs_and_each_line_says_which_it_came_from() {
+    let d = tempfile::tempdir().unwrap();
+    let claude = d.path().join("claude");
+    write_lines(
+        &claude.join("-p-net").join(format!("{S1}.jsonl")),
+        &[user(S1, "2026-10-02T05:00:00Z", "pivot from claude")],
+    );
+    let codex = d.path().join("codex");
+    write_raw(
+        &cx_file(&codex, CX_DAY, CX_LOCAL, CX1),
+        &[
+            cx_meta(CX1, "2026-10-02T05:00:00.000Z", CX_CWD, ""),
+            cx_msg(1, "2026-10-02T05:01:00.000Z", "user", &["pivot from codex"]),
+        ],
+    );
+    fs::create_dir_all(codex.join("archived_sessions")).unwrap();
+    let (a, b) = (
+        codex.join("sessions").to_str().unwrap().to_string(),
+        codex
+            .join("archived_sessions")
+            .to_str()
+            .unwrap()
+            .to_string(),
+    );
+    let sources = |extra: &[&str]| {
+        let mut args = vec![
+            "search",
+            "pivot",
+            "--json",
+            "--codex-root",
+            &a,
+            "--codex-root",
+            &b,
+        ];
+        args.extend(extra);
+        let (code, out, err) = run(&claude, &args);
+        assert_eq!(code, 0, "{err}");
+        out.lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .map(|h| h["source"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(sources(&[]), ["claude", "codex"]);
+    assert_eq!(sources(&["--source", "all"]), ["claude", "codex"]);
+    assert_eq!(sources(&["--source", "claude"]), ["claude"]);
+    assert_eq!(sources(&["--source", "codex"]), ["codex"]);
+    // The text form carries the source too.
+    let (_, out, _) = run(
+        &claude,
+        &["search", "pivot", "--codex-root", &a, "--codex-root", &b],
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(
+        lines[0].contains("claude") && lines[1].contains("codex"),
+        "{out}"
+    );
+    // `show` finds the session in either, and `--source` narrows it.
+    let roots = ["--codex-root", &a, "--codex-root", &b];
+    let mut args = vec!["show", "0000c001"];
+    args.extend(roots);
+    let (code, out, _) = run(&claude, &args);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("# 0000c001  codex"), "{out}");
+    args.extend(["--source", "claude"]);
+    let (code, _, _) = run(&claude, &args);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn source_and_codex_root_have_clear_failures() {
+    let d = tempfile::tempdir().unwrap();
+    // Asked for alone with nowhere to read: exit 3 and where to look.
+    let (code, _, err) = run(d.path(), &["search", "x", "--source", "codex"]);
+    assert_eq!(code, 3, "{err}");
+    assert!(err.contains("--codex-root"), "{err}");
+    // Beside Claude's logs, no Codex logs on the machine is not an error.
+    let (code, _, err) = run(d.path(), &["search", "x"]);
+    assert_eq!(code, 0, "{err}");
+    let missing = d.path().join("missing");
+    let (code, _, err) = run(
+        d.path(),
+        &["search", "x", "--codex-root", missing.to_str().unwrap()],
+    );
+    assert_eq!(code, 3, "{err}");
+    assert!(err.contains("missing"), "{err}");
+    for args in [
+        &["search", "x", "--source", "bogus"][..],
+        &["repeats", "--source", "codex"],
+        &["tool", "rpatch", "--codex-root", "/x"],
+    ] {
+        let (code, _, err) = run(d.path(), args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn codex_files_are_chosen_by_the_window() {
+    let d = tempfile::tempdir().unwrap();
+    let t = |day: u32| format!("2026-10-{day:02}T05:00:00.000Z");
+    write_raw(
+        &cx_file(d.path(), CX_DAY, CX_LOCAL, CX1),
+        &[
+            cx_meta(CX1, &t(2), CX_CWD, ""),
+            cx_msg(1, &t(2), "user", &["window early"]),
+            cx_msg(2, &t(9), "user", &["window late"]),
+        ],
+    );
+    assert_eq!(cx_hits(d.path(), &["window"]).len(), 2);
+    let got = cx_hits(d.path(), &["window", "--until", "2026-10-05T00:00Z"]);
+    assert_eq!(snippets(&got), ["window early"]);
+    let got = cx_hits(d.path(), &["window", "--since", "2026-10-05T00:00Z"]);
+    assert_eq!(snippets(&got), ["window late"]);
+    // Before the session began: the file is not even opened.
+    assert_eq!(
+        cx_hits(d.path(), &["window", "--until", "2026-09-01"]).len(),
+        0
+    );
+    // A file last written before the window holds nothing in it.
+    assert_eq!(
+        cx_hits(d.path(), &["window", "--since", "2099-01-01"]).len(),
+        0
+    );
 }

@@ -42,7 +42,24 @@ pub struct Event {
     pub text: String,
 }
 
+/// Which agent's log a session came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Source {
+    Claude,
+    Codex,
+}
+
+impl Source {
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::Claude => "claude",
+            Source::Codex => "codex",
+        }
+    }
+}
+
 pub struct Session {
+    pub source: Source,
     pub project: String,
     pub sid: String,
     /// Set for a subagent's file: the agent id, with the parent in `sid`.
@@ -51,10 +68,15 @@ pub struct Session {
 }
 
 impl Session {
-    /// What `search` prints and `show` takes: 8 characters of the session, then
-    /// `/` and 8 of the agent for a subagent.
+    /// What `search` prints and `show` takes. Claude: 8 characters of the session, then
+    /// `/` and 8 of the agent for a subagent. Codex: the last 8 characters (its ids are
+    /// UUIDv7, so sessions of the same period share the first ones).
     pub fn id(&self) -> String {
         let short = |s: &str| s.chars().take(8).collect::<String>();
+        if self.source == Source::Codex {
+            let n = self.sid.chars().count();
+            return self.sid.chars().skip(n.saturating_sub(8)).collect();
+        }
         match &self.agent {
             Some(a) => format!("{}/{}", short(&self.sid), short(a)),
             None => short(&self.sid),
@@ -92,7 +114,7 @@ const INJECTED_STARTS: &[&str] = &[
 /// A prompt that a tool or the orchestrator sent in the user's place (the T3 Code app
 /// hands tasks to subagents and asks for titles). The log marks it like a typed one, so
 /// only its wording tells; it counts as `task`, not as the user's words.
-fn sent_for_a_task(text: &str) -> bool {
+pub fn sent_for_a_task(text: &str) -> bool {
     const STARTS: &[&str] = &[
         "Delegated task",
         "Act as the ",
@@ -174,7 +196,16 @@ fn tool_line(name: &str, input: &Value) -> String {
             .find_map(|k| str_field(input, k)),
     }
     .unwrap_or("");
-    let first = detail.lines().next().unwrap_or("").trim();
+    note(name, detail)
+}
+
+/// `[name] first line of the detail…`, cut at 100 characters.
+pub fn note(name: &str, detail: &str) -> String {
+    let first = detail
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     let mut s: String = first.chars().take(100).collect();
     if first.chars().count() > 100 || detail.trim().lines().count() > 1 {
         s.push('…');
@@ -191,7 +222,7 @@ fn tool_line(name: &str, input: &Value) -> String {
 
 /// `/Users/me/project/prod/network/designer` → `network/designer`: the session's first
 /// working directory, without the home directory and the usual `project/prod/`.
-fn project_name(cwd: &str) -> String {
+pub fn project_name(cwd: &str) -> String {
     let mut parts: Vec<&str> = cwd.split('/').filter(|s| !s.is_empty()).collect();
     if parts.len() >= 2 && matches!(parts[0], "Users" | "home") {
         parts.drain(..2);
@@ -356,6 +387,7 @@ fn read_session(root: &Path, path: &Path, f: &Filter, tools: bool) -> io::Result
     let (sid, agent) = ids(path, inner.as_deref());
     let folder = load::folder_of(root, path);
     Ok(Session {
+        source: Source::Claude,
         project: cwd
             .as_deref()
             .map(project_name)
