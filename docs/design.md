@@ -1,6 +1,6 @@
 # agentlog の設計
 
-2026-10-15。10 月のセッションログから次に作る道具を探したとき、使い捨ての Python で数え方を 3 回取り違えた（README の「経緯」）。その直した数え方を、道具を問わず使える 1 つのバイナリに固めたもの。
+2026-10-15。10 月のセッションログから次に作る道具を探したとき、使い捨ての Python で数え方を 3 回取り違えた（README の「経緯」）。その直した数え方を、道具を問わず使える 1 つのバイナリに固めたもの。2026-10-17 に、振り返りでログを「探す」「読む」ための `search` と `show` を足した（下の「search と show」）。
 
 ## 問題
 
@@ -128,15 +128,49 @@ devsrv
 
 | ファイル | 役目 |
 |---|---|
-| `main.rs` | 引数を読み、ログを読み、3 つのうち 1 つを呼んで出す |
+| `main.rs` | 引数を読み、ログを読み、5 つ（`repeats`・`tool`・`daily`・`search`・`show`）のうち 1 つを呼んで出す |
 | `cli.rs` | 引数。オプションはサブコマンドの後のどこに置いてもよい。実行中のセッションを外す |
-| `load.rs` | ファイルを集め、スレッドで並べて読み、呼び出しにする |
+| `load.rs` | ファイルを集め（`select_files`）、スレッドで並べて読み（`read_all`）、呼び出しにする |
 | `sig.rs` | プログラム、エラー行、ならし、シグネチャ、ユーザーが断ったか |
 | `commands.rs` | `repeats`・`tool`・`daily` と、プリセット |
+| `talk.rs` | 会話の読み込み：人の発言とそうでないものの見分け、assistant の text、ツールの1行、セッションの id、プロジェクト名 |
+| `recall.rs` | `search` と `show` の出力 |
 | `time.rs` | ISO 8601 の読み書き、地方時の日付、`14d` のような相対の指定 |
 
 依存は `serde_json`、`regex-lite`、`libc`（地方時の差）だけ。10 月の半月分（約 1.3 GB、684 文脈、2.9 万回の呼び出し）を 1 秒前後で読む。行に `"tool_use` も `"tool_result` も含まれなければ JSON として読まずに飛ばすのが効いている。
 
+### search と show
+
+`repeats`・`tool`・`daily` が道具の呼び出しを数えるのに対し、この 2 つは会話の本文を読む。振り返りで「前に何と言ったか」「なぜそう決めたか」を探すためのもの。使うのは主に Claude（Bash から呼ぶ）。
+
+**何を会話とみなすか.** 対象は、人の発言（`user`）と assistant の `text`。tool_use の入力、tool_result、thinking は入れない（ツールの方は既存の `daily` などの領分）。`user` の行には、人が打った文のほかに、ツールの結果とハーネスが差し込んだ文が混ざるので、`talk.rs` の `read_session` と `human_text` の 1 か所で分ける。
+
+| 見るところ | 扱い |
+|---|---|
+| `user` の行で、内容が tool_result だけ | 外す（`"type":"tool_result"` を含み `"type":"text"` を含まない行は、JSON に読む前に飛ばす） |
+| `isMeta`、`isCompactSummary`、`isVisibleInTranscriptOnly` | 外す |
+| `promptSource` が `system`、`turnOrigin` が `task_notification` / `peer` | 外す |
+| `<system-reminder>…</system-reminder>`、`<local-command-caveat>`、`<local-command-stdout/stderr>`、`<bash-input/stdout/stderr>`、`<task-notification>` | 差し込まれたブロック。メッセージのどこにあっても取り除く。残りが空なら発言なし |
+| `<command-name>/x</command-name>` と `<command-args>` | スラッシュコマンドは打ったもの。`/x 引数` 1 つの発言にする（後に続く展開されたスキル本文は `isMeta` で外れる） |
+| `[Request interrupted by user…`、`[Image: source:`、`This session is being continued from…`、`Base directory for this skill:`、`<scheduled-task`、`<command-message>` で始まる | ハーネスが書いた文。外す |
+| サブエージェントのファイルの `user` 行（`isSidechain` が真、またはファイル名が `agent-`） | 親が書いた依頼文。人の発言ではないので `who` を `task` にする |
+| T3 Code が人の代わりに送る定型の依頼（`Delegated task`、`Act as the `、`Generate a title `、`You generate concise git branch names`、`Continue where you left off`、`You have N orchestration message`） | これもログ上は打った文と同じ印（`promptSource: sdk`）なので、書き出しの文言で見分けて `task` にする |
+| assistant の `model` が `<synthetic>` | 外す（APIの代わりにハーネスが返した定型文） |
+| `queue-operation`、`attachment`、`system` など、`user`・`assistant` 以外の行 | 見ない |
+
+実際のログ（10 月分）で見た形：人が打った文は `promptSource` が `typed`（Claude Code の端末）か `sdk`（T3 Code などの SDK 経由）で、**印だけでは T3 が送る依頼文と区別できない**（どちらも `sdk`）。そのため、T3 Code の定型の書き出しの一覧（表の該当の行）は、ログを見て足していく経験則。新しい定型が混ざったら `sent_for_a_task` に足す。`--who user` が `task` を含まないのはこのため（`--who any` には含まれる）。
+
+**セッションの id.** 先頭 8 文字。サブエージェントは `親の8文字/エージェントの8文字`（`show` にそのまま渡せる）。親のセッションは、ファイルが `<session>.jsonl` ならその名前、サブエージェントは `<session>/subagents/agent-X.jsonl` の `<session>`、古い形で同じディレクトリに `agent-X.jsonl` があるときは、行の中の `sessionId`。
+
+**プロジェクト名.** フォルダ名（`-Users-me-project-prod-network-network-designer`）は、ハイフンが区切りか名前の一部か分からないので、読みやすくできない。ssh で入ったセッションのフォルダ（`ssh-<id>`）には、パスがまったく出ない。そこで、**セッションで最初に出る `cwd`**（開始したディレクトリ）から作る。ホーム（`/Users/<名前>/`、`/home/<名前>/`）と、先頭の `project/prod/`（なければ `project/`）を落とす。`/Users/me/project/prod/network/network-designer` は `network/network-designer`、`~/.t3/worktrees/x/y` は `.t3/worktrees/x/y`、ssh 先の `/home/u/project/designer` は `designer`、ホームそのものは `~`。`cwd` がなければフォルダ名を従来どおり短くしたもの。`--project S` は、フォルダ名か、この表示名のどちらかに S が含まれればよい（ssh のセッションを名前で拾えるように、読んだあとで判定する）。
+
+**search.** 発言ごとに最初の一致を 1 行にする（時刻は地方時の分まで、`who`、id、プロジェクト、一致箇所の前後 40 文字ずつ。改行は空白）。古い順。`--limit`（既定 50）を超えたら**新しい方を残して**、全件数と切った数を出す（振り返りで欲しいのは最近の方が多いため。古い方は `--since`・`--until` で絞って見る）。`--json` は 1 件 1 オブジェクトで 1 行ずつ、切ったことの知らせは標準エラーに出す。0 件でも終了コードは 0。窓の既定は**制限なし**（`--since 14d` ではない。古い会話を探すため）。
+
+**show.** `SESSION` は id の先頭（`search` が出した 8 文字、サブエージェントは `親/子`）。複数に当たれば、候補を出して終了コード 2。実行中のセッションを自動で外す動きは `show` では行わない（名前を指定しているので）。本文は順に、ツールの呼び出しは `[Bash] コマンドの先頭行…` の 1 行（結果は出さない）。`--grep RE`（最初に一致した発言）か `--at 時刻`（もっとも近い発言。分までなら、その分の中の最初の発言）を中心に、前後 `--around N`（既定 5）発言を出す。中心の発言には `>>` を付け、各発言に `#番号` を付ける。どちらもなければ全部。1 発言は 2000 文字で切る（`--full` で全部）。
+
+**なぜ DB を持たないか.** 全ログ（1.3 GB）を読んで検索するのに、リリースビルドで 0.4〜0.5 秒、メモリは 50 MB 弱（`rg` で直に探すと 0.06 秒）。呼ぶのは振り返りのときだけで、速さは足りている。索引を持つと、更新の遅れ、置き場所、作り直しの手順が増え、ログの形が変わったときに壊れる場所も増える。公式にセッション検索が来たら、`talk.rs`・`recall.rs`・`cli.rs` の `search`/`show` の分岐・`main.rs` の `search`/`show` 関数を消せば終わる形にしてある（`load.rs` の `select_files` / `read_all` は残って `repeats` などが使う）。
+
+## ほかに考えた形
 ## ほかに考えた形
 
 - **Python のまま、rpatch の `tools/log-analysis/` を広げる。** 速さと、rpatch・devsrv と同じ置き方（`cargo install`）を取った。rpatch の分析は rpatch 専用の詳しさ（失敗の種類、書式の内訳）があるので、そのまま残す。
@@ -149,3 +183,6 @@ devsrv
 - **シグネチャの分かれ方.** プログラムの取り方で分かれることがある（`cat > x <<EOF && rpatch …` は `Bash cat`）。`tool` は正規表現で当てるので影響しない。
 - **ログの形式.** Claude Code のログの形が変わると読めなくなる。`tool_use` / `tool_result` / `is_error` / `timestamp` / `Exit code N` に頼っている。Codex のログは読まない。
 - **今のセッション.** `CLAUDE_CODE_SESSION_ID` があれば、パスにその ID を含むファイル（本体とサブエージェント）を外す。分析そのものの呼び出し（エラーの文字列を grep した、など）が、分析の結果に混ざるため。ターミナルから直接呼ぶと変数がないので、そのセッションの ID を `--exclude` で渡す。
+- **`search` の見分けは経験則.** 人の発言と T3 Code が送る依頼文は、ログの印では区別できない。一覧にない新しい定型が来ると、`--who user` に混ざる。`--exclude t3code-claude-title` のように、題名づけ用の一時セッションをフォルダ名で外す手もある。
+- **再開したセッションの複製.** 再開や分岐で、前のセッションの行が新しいファイルに写されることがあり、`search` が同じ発言を 2 つのセッションで見つけることがある（10 月分で `OK` を探した 487 件のうち、時刻・発言・誰が同じものが 11 件）。重複は消していない（どちらのセッションの id も本物のため）。
+- **書き出されなかった発言.** Claude Code が `queue-operation`（実行中に打った文の待ち行列）にしか書かなかった文や、ログに残らなかった文は見えない。

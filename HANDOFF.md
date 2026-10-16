@@ -4,7 +4,15 @@
 
 測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
 
-## 今どこまでできたか（2026-10-15）
+## search と show（2026-10-17、ブランチ `search-show`。main には未取り込み、`cargo install` もまだ）
+
+振り返りのためにログを「探す」「読む」を足した。`agentlog search REGEX`（人の発言と assistant の text を正規表現で探して1行ずつ、古い順）と `agentlog show SESSION`（`--grep` か `--at` を中心に前後 `--around N` 発言、ツールの呼び出しは1行）。窓の既定は制限なし。仕様と見分け方は `docs/design.md` の「search と show」、探し方の手順は `docs/recipes.md` の 4。DB・索引・常駐は持たない（全ログ 1.3 GB で 0.4〜0.5 秒）。
+
+- **確かめ.** 単体 15 件、結合 16 件（うち 7 件が search/show。手で書いた架空の会話）。わざと壊して落ちるのを確かめた：tool_result を本文に入れる、`system-reminder` を人の発言に入れる、`--since` の既定を 14d に戻す、の 3 つ。
+- **まだしていないこと.** main への取り込み、`cargo install`、`~/.claude/CLAUDE.md` の「CLI tools」への案内（変えたら `~/.codex/AGENTS.md` と `~/.cursor/rules/global.mdc` にも写し、`changes.md` に時刻を書く）。
+- **既知の限り.** 人の発言と T3 Code が送る依頼文は、ログの印では区別できず、書き出しの文言の一覧（`talk.rs` の `sent_for_a_task`）で `task` に分けている。新しい定型が混ざったらそこに足す。再開したセッションの複製で、同じ発言が2つのセッションに出ることがある（約2%）。
+
+## 今どこまでできたか（2026-10-15、repeats / tool / daily）
 
 - **動くもの.** `repeats` / `tool` / `daily` の 3 つ。`cargo install --locked --path .` で `~/.cargo/bin/agentlog`（0.1.0）に入れた。数え方は `docs/design.md`、使いどころは `docs/recipes.md`。
 - **確かめ.** `cargo test` に、単体テスト 9 件（時刻、シグネチャ）と、手で書いたログを読ませる結合テスト 9 件。わざと壊したとき（窓を外す、ユーザーの拒否を数える、断られたものにプログラム名を付ける、rpatch の失敗の判定を外す、Write を常に数える、実行中のセッションを外さない）に、6 つとも落ちることを確かめた。

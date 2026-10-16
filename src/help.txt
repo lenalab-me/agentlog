@@ -20,7 +20,7 @@ Examples:
   agentlog tool devsrv --since 2026-10-01           other ways per day, before and after
   agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
   agentlog search 'too loose' -i --who user         what was said, oldest first
-  agentlog show 42240b0c --at '2026-10-02 14:25'    read around a hit (id and time as printed)
+  agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
 
 Output: text tables; --json prints one JSON object instead (search: one object per hit,
 one per line). Commands appear only with -v/--examples, since they can hold credentials;

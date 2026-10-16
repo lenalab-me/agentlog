@@ -13,6 +13,11 @@ use cli::Cmd;
 use commands::Window;
 
 fn main() {
+    // `agentlog search … | head` closes the pipe early; end quietly like other tools.
+    // SAFETY: restoring the default action for SIGPIPE, before any thread starts.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let parsed = match cli::parse(std::env::args().skip(1).collect()) {
         Ok(p) => p,
         Err(e) => {

@@ -1,6 +1,6 @@
 # agentlog
 
-Claude Code のセッションログ（`~/.claude/projects/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。
+Claude Code のセッションログ（`~/.claude/projects/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`）もできる。
 
 ```sh
 cargo install --locked --path .
@@ -8,12 +8,14 @@ agentlog repeats --since 2026-10-01                 # 同じ失敗が 2 回以�
 agentlog tool rpatch --since 2026-10-01 -v          # 失敗のあと、次で直したか、別の手段に逃げたか
 agentlog tool devsrv --since 2026-10-01             # 使い始める前と後の、別のやり方の回数
 agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
+agentlog search 'too loose' -i --who user           # 前に何と言ったか（古い順。窓は既定で制限なし）
+agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時刻で、その前後の会話を読む
 ```
 
 使い方の全体は `agentlog --help`。Claude Code の中から呼ぶと、そのセッション自身は数えない（`--include-self` で入れる）。
 
 - [設計](docs/design.md): 文脈と呼び出し、失敗、シグネチャ、`repeats` と `tool` の数え方、プリセット、未決と危険
-- [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る
+- [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る、振り返りで会話を探す
 - [引き継ぎ](HANDOFF.md): 今どこまでできたか、10 月の結論、次にやること
 
 ## 数え方の決まり
@@ -29,6 +31,8 @@ agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-1
 ## 出すもの、出さないもの
 
 コマンドや結果には認証情報が入りうる。既定では件数と、パス・ID・数字をならしたエラー行だけを出す。コマンドの本文は `-v` / `--examples N` のときだけ。
+
+`search` と `show` は会話の本文を出す（それが目的）。`show` はツールの呼び出しも `[Bash] コマンドの先頭行…` と1行で出すので、コマンドに秘密が入っていれば出る。結果は出さない。出力を人に渡すときは確かめる。
 
 ## 経緯
 
