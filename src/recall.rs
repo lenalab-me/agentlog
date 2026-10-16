@@ -38,7 +38,7 @@ const MATCH: usize = 120;
 /// Longest utterance `show` prints without `--full`.
 const SHOW_CAP: usize = 2000;
 
-fn one_line(s: &str) -> String {
+pub fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

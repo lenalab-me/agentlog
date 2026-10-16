@@ -10,6 +10,7 @@ use crate::commands::{DailyOpts, Field, PRESETS, RepeatsOpts, Spec, ToolOpts, pr
 use crate::needle::Prefilter;
 use crate::recall::{SearchOpts, ShowOpts, WhoFilter};
 use crate::time;
+use crate::timeline::TimelineOpts;
 
 pub const HELP: &str = include_str!("help.txt");
 
@@ -22,6 +23,7 @@ pub enum Cmd {
     Search(SearchOpts),
     /// The session (an id or its start) and what to show of it.
     Show(String, ShowOpts),
+    Timeline(TimelineOpts),
 }
 
 /// `--source`: which agents' logs `search` and `show` read.
@@ -59,7 +61,7 @@ pub struct Parsed {
     pub common: Common,
 }
 
-const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
+const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION|timeline --repo DIR [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
 
 fn regex(flag: &str, s: &str) -> Result<Regex, String> {
     Regex::new(s).map_err(|e| format!("{flag}: not a regex: {e}"))
@@ -116,7 +118,8 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     let mut include_self = false;
     let mut since_given = false;
     let mut ignore_case = false;
-    let mut who = WhoFilter::Any;
+    let mut who: Option<WhoFilter> = None;
+    let mut repo: Option<PathBuf> = None;
     let mut limit = 50;
     let mut grep: Option<String> = None;
     let mut at: Option<(i64, i64)> = None;
@@ -209,13 +212,14 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "-i" => ignore_case = true,
             "--full" => full = true,
             "--who" => {
-                who = match value(&mut it)?.as_str() {
+                who = Some(match value(&mut it)?.as_str() {
                     "user" => WhoFilter::User,
                     "assistant" => WhoFilter::Assistant,
                     "any" => WhoFilter::Any,
                     v => return Err(format!("--who: expected user, assistant or any; got `{v}`")),
-                }
+                })
             }
+            "--repo" => repo = Some(PathBuf::from(value(&mut it)?)),
             "--limit" => limit = number("--limit", &value(&mut it)?)?,
             "--around" => around = number("--around", &value(&mut it)?)?,
             "--grep" => grep = Some(value(&mut it)?),
@@ -267,14 +271,22 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     if common.since >= common.until {
         return Err("--since must be before --until".into());
     }
-    if (source_given || common.codex_roots_given) && sub != "search" && sub != "show" {
+    if (source_given || common.codex_roots_given)
+        && sub != "search"
+        && sub != "show"
+        && sub != "timeline"
+    {
         return Err(format!(
-            "--source and --codex-root are for search and show; {sub} reads Claude Code's logs only"
+            "--source and --codex-root are for search, show and timeline; {sub} reads Claude Code's logs only"
         ));
     }
+    if repo.is_some() && sub != "timeline" {
+        return Err(format!("--repo is for timeline; {sub} does not take it"));
+    }
     // Codex's logs are 20 times Claude's (5 s against 0.4 s to read them all) and no longer
-    // grow, so search reads them when asked. show finds a Codex id by its file name, cheaply.
-    if sub == "search" && !source_given && !common.codex_roots_given {
+    // grow, so search (and timeline) read them when asked. show finds a Codex id by its file
+    // name, cheaply.
+    if (sub == "search" || sub == "timeline") && !source_given && !common.codex_roots_given {
         common.source = SourceSel::Claude;
     }
     if !common.codex_roots_given {
@@ -370,7 +382,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 .map_err(|e| format!("search: not a regex: {e}"))?;
             Cmd::Search(SearchOpts {
                 re,
-                who,
+                who: who.unwrap_or(WhoFilter::Any),
                 limit,
                 prefilter: Prefilter::new(pattern, ignore_case),
             })
@@ -401,6 +413,24 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                     full,
                 },
             )
+        }
+        "timeline" => {
+            if !rest.is_empty() {
+                return Err(format!(
+                    "timeline takes no arguments, got `{}` (the repository is --repo DIR)\n{USAGE}",
+                    rest.join(" ")
+                ));
+            }
+            let Some(repo) = repo else {
+                return Err(format!(
+                    "timeline needs --repo DIR (the git repository whose commits and sessions to line up)\n{USAGE}"
+                ));
+            };
+            Cmd::Timeline(TimelineOpts {
+                repo,
+                // The assistant writes a great deal: what was asked is the thread.
+                who: who.unwrap_or(WhoFilter::User),
+            })
         }
         other => return Err(format!("unknown command `{other}`\n{USAGE}")),
     };

@@ -10,6 +10,7 @@ mod recall;
 mod sig;
 mod talk;
 mod time;
+mod timeline;
 
 use cli::Cmd;
 use commands::Window;
@@ -48,6 +49,7 @@ fn main() {
     match &parsed.cmd {
         Cmd::Search(o) => return search(c, &filter, o),
         Cmd::Show(session, o) => return show(c, &filter, session, o),
+        Cmd::Timeline(o) => return timeline(c, &filter, o),
         _ => {}
     }
     let log = match load::load(&c.root, &filter) {
@@ -65,7 +67,9 @@ fn main() {
         Cmd::Repeats(o) => commands::repeats(&log, &w, o),
         Cmd::Tool(spec, o) => commands::tool(&log, &w, spec, o),
         Cmd::Daily(o) => commands::daily(&log, &w, o),
-        Cmd::Help | Cmd::Version | Cmd::Search(_) | Cmd::Show(..) => unreachable!(),
+        Cmd::Help | Cmd::Version | Cmd::Search(_) | Cmd::Show(..) | Cmd::Timeline(_) => {
+            unreachable!()
+        }
     };
     if c.json {
         println!("{json}");
@@ -97,7 +101,13 @@ fn codex_roots(c: &cli::Common) -> Option<&[std::path::PathBuf]> {
     Some(&c.codex_roots)
 }
 
-fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
+/// The sessions to search, from the logs `--source` picks. `pre` turns away Codex messages
+/// that cannot match before they are parsed.
+fn conversation(
+    c: &cli::Common,
+    filter: &load::Filter,
+    pre: Option<&needle::Prefilter>,
+) -> Vec<talk::Session> {
     let mut sessions = Vec::new();
     if c.source.claude() {
         sessions.extend(
@@ -107,10 +117,15 @@ fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
     }
     if let Some(roots) = codex_roots(c) {
         sessions.extend(
-            codex::load_sessions(roots, filter, false, o.prefilter.as_ref())
+            codex::load_sessions(roots, filter, false, pre)
                 .unwrap_or_else(|e| unreadable("the Codex logs", e)),
         );
     }
+    sessions
+}
+
+fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
+    let sessions = conversation(c, filter, o.prefilter.as_ref());
     let (text, hits, note) = recall::search(&sessions, o);
     if c.json {
         // One object per hit, so the output reads line by line; the note goes aside.
@@ -124,6 +139,41 @@ fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
         print!("{text}");
         if let Some(n) = note {
             println!("{n}");
+        }
+    }
+}
+
+fn timeline(c: &cli::Common, filter: &load::Filter, o: &timeline::TimelineOpts) {
+    let bad = |e: String| -> ! {
+        eprintln!("agentlog: {e}");
+        std::process::exit(2);
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let repo = timeline::Repo::find(&o.repo, &home).unwrap_or_else(|e| bad(e));
+    let commits = timeline::commits(&o.repo, c.since, c.until).unwrap_or_else(|e| bad(e));
+    let sessions = conversation(c, filter, None);
+    // --project S picks sessions by name (already done by the filter); without it they are
+    // the ones that worked in the repository or one of its worktrees.
+    let mine: Vec<&talk::Session> = sessions
+        .iter()
+        .filter(|s| !filter.projects.is_empty() || repo.owns(s))
+        .collect();
+    let (text, items, note) = timeline::render(&mine, &commits, o.who);
+    if c.json {
+        for i in &items {
+            println!("{i}");
+        }
+        if let Some(n) = note {
+            eprintln!("agentlog: {n}");
+        }
+    } else {
+        print!("{text}");
+        if let Some(n) = note {
+            println!("{n}");
+            println!(
+                "sessions are matched by where they worked: under {}",
+                repo.roots.join(", ")
+            );
         }
     }
 }

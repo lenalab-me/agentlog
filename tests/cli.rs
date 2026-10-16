@@ -1270,3 +1270,364 @@ fn search_reads_codex_only_when_asked_and_show_finds_it_anyway() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("ZEBRA from codex"), "{out}");
 }
+
+// timeline: git repositories made here, and sessions written by hand that work in them
+
+/// `git` in `dir` with fixed names, no global config, and the times given.
+fn git_in(dir: &Path, author: &str, committer: &str, args: &[&str]) -> String {
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=tester",
+            "-c",
+            "user.email=tester@example.com",
+        ])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_DATE", author)
+        .env("GIT_COMMITTER_DATE", committer)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+/// An empty commit made at `author` and recorded (rebased, say) at `committer`.
+fn commit(dir: &Path, author: &str, committer: &str, subject: &str) {
+    git_in(
+        dir,
+        author,
+        committer,
+        &["commit", "--allow-empty", "-q", "-m", subject],
+    );
+}
+
+/// A new repository at `dir` (made, with its real path returned: git reports that one).
+fn init_repo(dir: &Path) -> std::path::PathBuf {
+    fs::create_dir_all(dir).unwrap();
+    let dir = fs::canonicalize(dir).unwrap();
+    git_in(
+        &dir,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        &["init", "-q"],
+    );
+    dir
+}
+
+/// One typed line of a session that was working in `cwd`.
+fn said_in(cwd: &Path, sid: &str, ts: &str, who: &str, text: &str) -> Value {
+    let mut v = if who == "user" {
+        user(sid, ts, text)
+    } else {
+        says(sid, ts, text)
+    };
+    v["cwd"] = json!(cwd.to_str().unwrap());
+    v
+}
+
+fn sid(n: u32) -> String {
+    format!("{n:08x}-1111-4000-8000-000000000001")
+}
+
+/// `agentlog timeline --repo REPO …` with the clock on UTC and HOME as given.
+fn tl(root: &Path, home: &Path, repo: &Path, args: &[&str]) -> (i32, String, String) {
+    let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+        .args(["timeline", "--repo", repo.to_str().unwrap()])
+        .args(["--root", root.to_str().unwrap()])
+        .args([
+            "--since",
+            "2026-10-01T00:00Z",
+            "--until",
+            "2026-10-20T00:00Z",
+        ])
+        .args(args)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env("HOME", home)
+        .env("TZ", "UTC")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    (
+        o.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+fn items(root: &Path, home: &Path, repo: &Path, args: &[&str]) -> Vec<Value> {
+    let mut a = args.to_vec();
+    a.push("--json");
+    let (code, out, err) = tl(root, home, repo, &a);
+    assert_eq!(code, 0, "stderr: {err}");
+    out.lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
+        .collect()
+}
+
+/// `kind:text` of each item, to read an order at a glance.
+fn story(v: &[Value]) -> Vec<String> {
+    v.iter()
+        .map(|i| {
+            format!(
+                "{}:{}",
+                i["kind"].as_str().unwrap(),
+                i["snippet"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn timeline_puts_the_talk_and_the_commits_in_one_order_by_time() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = init_repo(&d.path().join("proj/designer"));
+    let t = |h: u32, m: u32| format!("2026-10-05T{h:02}:{m:02}:00Z");
+    commit(&repo, &t(10, 0), &t(10, 0), "first change");
+    // Rebased the next day: the author time says when it was written, and decides the place.
+    commit(&repo, &t(10, 20), "2026-10-06T09:00:00Z", "second change");
+    // On another branch, merged with a merge commit that is left out of the list.
+    git_in(
+        &repo,
+        &t(10, 25),
+        &t(10, 25),
+        &["checkout", "-q", "-b", "side"],
+    );
+    commit(&repo, &t(10, 40), &t(10, 40), "side change");
+    git_in(&repo, &t(10, 45), &t(10, 45), &["checkout", "-q", "main"]);
+    git_in(
+        &repo,
+        &t(10, 50),
+        &t(10, 50),
+        &["merge", "--no-ff", "-q", "-m", "Merge side", "side"],
+    );
+    commit(
+        &repo,
+        "2026-10-07T08:00:00Z",
+        "2026-10-07T08:00:00Z",
+        "after the window",
+    );
+
+    let root = d.path().join("claude");
+    let s = sid(1);
+    write_lines(
+        &root.join(format!("-p/{s}.jsonl")),
+        &[
+            said_in(&repo, &s, &t(9, 50), "user", "ask one"),
+            said_in(&repo, &s, &t(10, 10), "user", "ask two"),
+            said_in(&repo, &s, &t(10, 15), "assistant", "answer two"),
+            said_in(&repo, &s, &t(10, 30), "user", "ask three"),
+            said_in(&repo, &s, &t(10, 55), "user", "ask four"),
+        ],
+    );
+    let home = d.path().join("home");
+    let v = items(&root, &home, &repo, &["--until", "2026-10-06T00:00Z"]);
+    assert_eq!(
+        story(&v),
+        [
+            "user:ask one",
+            "commit:first change",
+            "user:ask two",
+            "commit:second change",
+            "user:ask three",
+            "commit:side change",
+            "user:ask four",
+        ]
+    );
+    assert_eq!(v[1]["hash"].as_str().unwrap().len(), 40);
+    assert_eq!(v[0]["id"], "00000001");
+    assert_eq!(v[0]["session"], s.as_str());
+    // The assistant's text comes with --who any, in its place.
+    let all = items(
+        &root,
+        &home,
+        &repo,
+        &["--until", "2026-10-06T00:00Z", "--who", "any"],
+    );
+    let at = story(&all)
+        .iter()
+        .position(|x| x == "assistant:answer two")
+        .unwrap();
+    assert_eq!(story(&all)[at - 1], "user:ask two");
+    // The window applies to commits by author time too.
+    let wide = items(&root, &home, &repo, &[]);
+    assert!(story(&wide).contains(&"commit:after the window".to_string()));
+    assert!(
+        !story(&items(
+            &root,
+            &home,
+            &repo,
+            &["--until", "2026-10-07T00:00Z"]
+        ))
+        .contains(&"commit:after the window".to_string())
+    );
+
+    // The text: a line per item with the local time, a rule where the day changes, and the
+    // session id only where the session changes.
+    let (code, out, err) = tl(&root, &home, &repo, &["--until", "2026-10-06T00:00Z"]);
+    assert_eq!(code, 0, "{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "--- 2026-10-05 ---");
+    assert!(
+        lines[1].starts_with("2026-10-05 09:50  user       00000001  | ask one"),
+        "{out}"
+    );
+    assert!(
+        lines[2].starts_with("2026-10-05 10:00  commit     "),
+        "{out}"
+    );
+    assert!(
+        lines[3].starts_with("2026-10-05 10:10  user       00000001  | ask two"),
+        "{out}"
+    );
+    let (_, out, _) = tl(
+        &root,
+        &home,
+        &repo,
+        &["--until", "2026-10-06T00:00Z", "--who", "any"],
+    );
+    let l: Vec<&str> = out.lines().collect();
+    let i = l.iter().position(|x| x.contains("| ask two")).unwrap();
+    assert!(
+        l[i + 1].contains("assistant") && !l[i + 1].contains("00000001"),
+        "{out}"
+    );
+}
+
+#[test]
+fn timeline_takes_the_sessions_that_worked_in_the_repository_or_a_worktree_of_it() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = init_repo(&d.path().join("proj/designer"));
+    commit(
+        &repo,
+        "2026-10-05T10:00:00Z",
+        "2026-10-05T10:00:00Z",
+        "a change",
+    );
+    let parent = repo.parent().unwrap().to_path_buf();
+    let other = parent.join("other");
+    let lookalike = parent.join("designer-two");
+    // A worktree git still lists, and one T3 Code made and deleted since.
+    let live = d.path().join("elsewhere/live");
+    git_in(
+        &repo,
+        "2026-10-05T10:01:00Z",
+        "2026-10-05T10:01:00Z",
+        &["worktree", "add", "-q", "-b", "wt", live.to_str().unwrap()],
+    );
+    let live = fs::canonicalize(&live).unwrap();
+    let home = d.path().join("home");
+    let t3 = home.join(".t3/worktrees/designer/feature");
+    let t3_of_another = home.join(".t3/worktrees/other-app/feature");
+
+    let root = d.path().join("claude");
+    let mut n = 0;
+    let mut session = |label: &str, lines: Vec<(&Path, u32)>| {
+        n += 1;
+        let s = sid(n);
+        let rows: Vec<Value> = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(k, (cwd, count))| {
+                (0..*count).map(move |j| (k, *cwd, j)).collect::<Vec<_>>()
+            })
+            .enumerate()
+            .map(|(i, (_, cwd, _))| {
+                let ts = format!("2026-10-05T11:{i:02}:00Z");
+                // The first line is the one that is looked for; the rest is only where it was.
+                let who = if i == 0 { "user" } else { "assistant" };
+                said_in(cwd, &s, &ts, who, &format!("{label} {i}"))
+            })
+            .collect();
+        write_lines(&root.join(format!("-p/{s}.jsonl")), &rows);
+        s
+    };
+    let inside = session("inside", vec![(repo.as_path(), 2)]);
+    let sub = session("subfolder", vec![(repo.join("backend").as_path(), 2)]);
+    let in_live = session("live", vec![(live.as_path(), 2)]);
+    let in_t3 = session("t3", vec![(t3.as_path(), 2)]);
+    // Opened in the parent folder, then mostly worked in the repository.
+    let from_parent = session(
+        "from parent",
+        vec![(parent.as_path(), 6), (repo.as_path(), 3)],
+    );
+    let _parent_only = session("parent only", vec![(parent.as_path(), 8)]);
+    let _sibling = session("sibling", vec![(other.as_path(), 3)]);
+    let _lookalike = session("lookalike", vec![(lookalike.as_path(), 3)]);
+    let _t3_other = session("t3 other", vec![(t3_of_another.as_path(), 3)]);
+    // Opened in the parent folder, but worked more in the sibling.
+    let _mostly_sibling = session(
+        "mostly sibling",
+        vec![
+            (parent.as_path(), 6),
+            (repo.as_path(), 2),
+            (other.as_path(), 4),
+        ],
+    );
+    // Half here, half there: kept.
+    let half = session("half", vec![(repo.as_path(), 3), (other.as_path(), 3)]);
+
+    let picked = |args: &[&str]| -> Vec<String> {
+        let mut v: Vec<String> = items(&root, &home, &repo, args)
+            .iter()
+            .filter(|i| i["kind"] == "user")
+            .map(|i| i["session"].as_str().unwrap().to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    let mut want = vec![inside, sub, in_live, in_t3, from_parent, half.clone()];
+    want.sort();
+    assert_eq!(picked(&[]), want);
+
+    // --project names the sessions by the directory they started in, not by the repository.
+    assert_eq!(picked(&["--project", "proj/other"]), [sid(7)]);
+}
+
+#[test]
+fn timeline_needs_a_git_repository_and_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let root = d.path().join("claude");
+    fs::create_dir_all(&root).unwrap();
+    let plain = d.path().join("not-a-repo");
+    fs::create_dir_all(&plain).unwrap();
+    let (code, out, err) = tl(&root, &home, &plain, &[]);
+    assert_eq!((code, out.as_str()), (2, ""), "{err}");
+    assert!(
+        err.contains("--repo") && err.contains("not a git repository"),
+        "{err}"
+    );
+    let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+        .args(["timeline", "--root", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("timeline needs --repo DIR"));
+    let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+        .args(["search", "x", "--repo", "."])
+        .args(["--root", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--repo is for timeline"));
+    // An empty window is said, with where sessions were looked for; exit 0.
+    let repo = init_repo(&d.path().join("repo"));
+    let (code, out, _) = tl(&root, &home, &repo, &[]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("0 items"), "{out}");
+    assert!(out.contains(repo.to_str().unwrap()), "{out}");
+}

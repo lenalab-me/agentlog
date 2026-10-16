@@ -6,6 +6,7 @@
 //! output of local commands); `human_text` is the one place that tells them apart.
 //! Thinking blocks, tool inputs and tool results are not conversation and are left out.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
@@ -65,6 +66,9 @@ pub struct Session {
     /// Set for a subagent's file: the agent id, with the parent in `sid`.
     pub agent: Option<String>,
     pub events: Vec<Event>,
+    /// Where the session was working: each `cwd` its lines carried in the window, with the
+    /// number of lines. `timeline` uses it to tell which repository a session belongs to.
+    pub cwds: HashMap<String, u32>,
 }
 
 impl Session {
@@ -292,6 +296,7 @@ fn read_session(root: &Path, path: &Path, f: &Filter, tools: bool) -> io::Result
     let reader = BufReader::new(fs::File::open(path)?);
     let mut events = Vec::new();
     let mut cwd: Option<String> = None;
+    let mut cwds: HashMap<String, u32> = HashMap::new();
     let mut inner: Option<String> = None;
     let agent_file = is_agent_file(path).is_some();
     for line in reader.lines() {
@@ -322,6 +327,14 @@ fn read_session(root: &Path, path: &Path, f: &Filter, tools: bool) -> io::Result
         };
         if ts < f.since || ts >= f.until {
             continue;
+        }
+        if let Some(c) = str_field(&v, "cwd") {
+            match cwds.get_mut(c) {
+                Some(n) => *n += 1,
+                None => {
+                    cwds.insert(c.to_string(), 1);
+                }
+            }
         }
         let Some(content) = v.pointer("/message/content") else {
             continue;
@@ -395,6 +408,7 @@ fn read_session(root: &Path, path: &Path, f: &Filter, tools: bool) -> io::Result
         sid,
         agent,
         events,
+        cwds,
     })
 }
 

@@ -7,14 +7,15 @@ Usage:
   agentlog daily NAME=REGEX... [--in input|result|any] [--tool T] [--failed]
   agentlog search REGEX [-i] [--who user|assistant|any] [--limit 50] [--source S]
   agentlog show SESSION [--grep RE | --at TIME] [--around 5] [--full] [-i] [--source S]
+  agentlog timeline --repo DIR [--who user|any] [--source S]
 Every command takes:
   --since WHEN  --until WHEN  --project S  --exclude S  --json
   --root DIR (Claude Code's logs, default ~/.claude/projects)
   --include-self (run inside Claude Code, the running session is left out by default)
   --since defaults to 14d, but to no limit for search and show (look back as far as needed).
   WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
-search and show also read Codex's logs: --source claude|codex|all (search: claude, show: all) and
-  --codex-root DIR (repeat it; default ~/.codex/sessions and ~/.codex/archived_sessions).
+search, show and timeline also read Codex's logs: --source claude|codex|all (search, timeline:
+  claude; show: all) and --codex-root DIR (repeat it; default ~/.codex/sessions and archived_sessions).
 
 Examples:
   agentlog repeats --since 2026-10-01               same failure in two or more places
@@ -25,12 +26,13 @@ Examples:
   agentlog search 'too loose' -i --who user         what was said, oldest first
   agentlog search 'Planconfig' --source codex       only Codex's logs
   agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
+  agentlog timeline --repo ~/project/prod/x --since 2026-10-01   what was said and committed
 
-Output: text tables; --json prints one JSON object instead (search: one object per hit,
-one per line). Commands appear only with -v/--examples, since they can hold credentials;
+Output: text tables; --json prints one JSON object instead (search, timeline: one object per
+hit, one per line). Commands appear only with -v/--examples, since they can hold credentials;
 show prints each tool call as a one-line note and never the result.
-Exit status: 0 ok (also with 0 hits); 2 invalid input, or SESSION not found or not unique;
-3 the log directory cannot be read.
+Exit status: 0 ok (also with 0 hits); 2 invalid input, SESSION not found or not unique, or
+--repo not a git repository; 3 the log directory cannot be read.
 
 search: one line per utterance that matches (the first match in it): local time, who
   (user, assistant, or task = a prompt the parent gave a subagent), source (claude or
@@ -45,8 +47,18 @@ show: SESSION is an id or its first characters (several fit: they are listed, ex
   utterance that matches) or --at TIME (nearest; to the minute covers the minute) picks
   one, and --around N shows N utterances either side; neither: the whole session.
   Utterances are cut at 2000 characters unless --full.
+timeline: what was said and what was committed in one list, oldest first, so a review or a
+  handoff reads as it happened. --repo DIR is a git repository (required). A line is the local
+  time, user|commit (--who any adds assistant and task), the session id (left blank while the
+  same session goes on) or the commit's short hash, and the first 100 characters; a rule line
+  `--- 2026-10-02 ---` where the day changes. The id works with show. Commits: every local and
+  remote branch once, merges left out, at the AUTHOR time (a rebase does not move it).
+  Sessions: those whose lines were written mostly (half or more) under the repository, a
+  worktree git lists, or ~/.t3/worktrees/<repo name>/ (T3 Code's, deleted ones too); lines in
+  a folder above the repository (where a session was opened) count for neither side. The
+  judgement uses only the lines in the window. --project S picks sessions by name instead.
 
-Codex logs (search and show; repeats, tool and daily read Claude Code's logs only):
+Codex logs (search, show and timeline; repeats, tool and daily read Claude Code's logs only):
   A Codex id is the LAST 8 characters of the session: ids start with a time, so sessions
   of one period share their first characters. show takes any part of an id (several fit:
   they are listed, exit 2). Roots: every --codex-root DIR, else those of ~/.codex/sessions

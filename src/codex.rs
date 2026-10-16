@@ -484,6 +484,7 @@ fn read_session(
         sid: id_of(&stem_of(path)),
         agent: None,
         events: r.events,
+        cwds: r.cwd.into_iter().map(|c| (c, 1)).collect(),
     })
 }
 
