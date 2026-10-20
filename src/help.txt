@@ -88,9 +88,19 @@ rules: count the prohibitions in the memory files and list them, so that they ca
   frontmatter or a fenced code block) that matches --pattern RE; the default is loose
   (しない しません 使わない 書かない 入れない 渡さない 提案しない 禁止 やめる 避ける, a sentence
   ending in ない, never, don't, do not, must not, avoid), so some lines only mention one.
-  Output: lines per file, most first, and the total; then every line as `file:NUMBER  text`.
+  Output: lines per file, most first, and the total; then every line as `file:NUMBER  [place]  text`.
   --count stops after the total. --json: one object per line (with --count, one per file and a
   last one with the totals).
+  Two marks to help sort the rules by where they belong. Place: where the file lives, one of
+  global (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md), repo (DIR/AGENTS.md, DIR/CLAUDE.md),
+  memory (a Claude Code project's memory) and codex-memory (~/.codex/memories); a column of the
+  table, in the lines, and "place" in --json. also in: a Claude memory whose file name (not
+  MEMORY.md) is also the name of a file in another project (a file shown through links is one
+  file, so it is not another project); the table and the lines say `also in: a, b`, --json
+  has "also_in" (a list, empty for none). Other projects are looked for in all of them, also
+  with --repo, --project or --exclude. Whether the two copies say the same is not compared.
+  A rule for one project in global, or one for every project in repo or memory, is for a
+  person or a model to find; nothing here judges it.
 
 Codex logs (search, show and timeline; repeats, tool and daily read Claude Code's logs only):
   A Codex id is the LAST 8 characters of the session: ids start with a time, so sessions

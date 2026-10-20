@@ -2,12 +2,13 @@
 //! many there are is known and they can be read side by side. Whether two of them collide is
 //! a judgement of meaning; this only finds the lines that forbid something and lists them.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use regex_lite::Regex;
 use serde_json::{Value, json};
 
+use crate::cli::SourceSel;
 use crate::memory::{Doc, Scope, Zone, collect, folder_name, instruction_file};
 use crate::talk::Source;
 
@@ -33,13 +34,98 @@ pub struct RulesOpts {
     pub home: String,
 }
 
+/// Where a file lives, which tells whether a rule is in the right place: a rule for one
+/// project that sits in `Global`, or one for every project that sits in `Repo` or `Memory`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Place {
+    /// `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`.
+    Global,
+    /// The AGENTS.md and CLAUDE.md of the `--repo` directory.
+    Repo,
+    /// A Claude Code project's memory.
+    Memory,
+    /// `~/.codex/memories`.
+    CodexMemory,
+}
+
+impl Place {
+    fn name(self) -> &'static str {
+        match self {
+            Place::Global => "global",
+            Place::Repo => "repo",
+            Place::Memory => "memory",
+            Place::CodexMemory => "codex-memory",
+        }
+    }
+}
+
+/// A file read, with where it lives and the other projects holding a memory of the same name.
+struct Entry {
+    doc: Doc,
+    place: Place,
+    /// Only for a Claude memory (not `MEMORY.md`); sorted, without the file's own project.
+    also_in: Vec<String>,
+}
+
+impl Entry {
+    /// `also in: a, b`, or nothing.
+    fn mark(&self) -> Option<String> {
+        (!self.also_in.is_empty()).then(|| format!("also in: {}", self.also_in.join(", ")))
+    }
+}
+
+/// The last component of a memory's path: what two projects' copies are told to be the same by.
+fn base(d: &Doc) -> String {
+    Path::new(&d.file)
+        .file_name()
+        .map_or_else(|| d.file.clone(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Per file name, the projects whose Claude memories hold a file of it. Looked at across all
+/// projects, however the files to read were narrowed. A file shown through several folders
+/// is one file in one project (`collect` merges them by the real path).
+fn projects_by_name(
+    o: &RulesOpts,
+    read: &[Doc],
+) -> Result<HashMap<String, BTreeSet<String>>, String> {
+    let sc = &o.scope;
+    if !sc.source.claude() {
+        return Ok(HashMap::new());
+    }
+    let narrowed = o.repo.is_some() || !sc.projects.is_empty() || !sc.excludes.is_empty();
+    let all;
+    let docs: &[Doc] = if narrowed {
+        all = collect(&Scope {
+            root: sc.root.clone(),
+            codex_memories: sc.codex_memories.clone(),
+            source: SourceSel::Claude,
+            projects: Vec::new(),
+            excludes: Vec::new(),
+            mtype: None,
+            index: false,
+            folders: None,
+        })?;
+        &all
+    } else {
+        read
+    };
+    let mut by: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for d in docs
+        .iter()
+        .filter(|d| d.memory && !d.index && d.source == Source::Claude)
+    {
+        by.entry(base(d)).or_default().insert(d.project.clone());
+    }
+    Ok(by)
+}
+
 /// The files to read: `~/.claude/CLAUDE.md` and the repository's own files when a
 /// repository is given, then the memories, then Codex's. Each real file once.
-fn documents(o: &RulesOpts) -> Result<Vec<Doc>, String> {
+fn documents(o: &RulesOpts) -> Result<Vec<Entry>, String> {
     let sc = &o.scope;
     let home = Path::new(&o.home);
-    let mut docs: Vec<Doc> = Vec::new();
-    let mut files: Vec<(PathBuf, Source)> = Vec::new();
+    let mut docs: Vec<(Doc, Place)> = Vec::new();
+    let mut files: Vec<(PathBuf, Source, Place)> = Vec::new();
     let mut scope = Scope {
         root: sc.root.clone(),
         codex_memories: sc.codex_memories.clone(),
@@ -57,26 +143,59 @@ fn documents(o: &RulesOpts) -> Result<Vec<Doc>, String> {
             return Err(format!("--repo {}: not a directory", repo.display()));
         }
         if sc.source.claude() {
-            files.push((home.join(".claude/CLAUDE.md"), Source::Claude));
+            files.push((
+                home.join(".claude/CLAUDE.md"),
+                Source::Claude,
+                Place::Global,
+            ));
         }
         if sc.source.codex() {
-            files.push((home.join(".codex/AGENTS.md"), Source::Codex));
+            files.push((home.join(".codex/AGENTS.md"), Source::Codex, Place::Global));
         }
-        files.push((real.join("AGENTS.md"), Source::Claude));
-        files.push((real.join("CLAUDE.md"), Source::Claude));
+        files.push((real.join("AGENTS.md"), Source::Claude, Place::Repo));
+        files.push((real.join("CLAUDE.md"), Source::Claude, Place::Repo));
         let mut folders = vec![folder_name(&real.to_string_lossy())];
         folders.push(folder_name(&repo.to_string_lossy()));
         scope.folders = Some(folders);
     } else if sc.source.codex() {
-        files.push((home.join(".codex/AGENTS.md"), Source::Codex));
+        files.push((home.join(".codex/AGENTS.md"), Source::Codex, Place::Global));
     }
-    for (p, s) in files {
-        docs.extend(instruction_file(&p, s, &o.home));
+    for (p, s, place) in files {
+        docs.extend(instruction_file(&p, s, &o.home).map(|d| (d, place)));
     }
-    docs.extend(collect(&scope)?);
+    let memories = collect(&scope)?;
+    let by_name = projects_by_name(o, &memories)?;
+    docs.extend(memories.into_iter().map(|d| {
+        let place = if d.source == Source::Codex {
+            Place::CodexMemory
+        } else {
+            Place::Memory
+        };
+        (d, place)
+    }));
     let mut seen = HashSet::new();
-    docs.retain(|d| seen.insert(d.path.clone()));
-    Ok(docs)
+    docs.retain(|(d, _)| seen.insert(d.path.clone()));
+    Ok(docs
+        .into_iter()
+        .map(|(doc, place)| {
+            let also_in = if place == Place::Memory && !doc.index {
+                by_name
+                    .get(&base(&doc))
+                    .into_iter()
+                    .flatten()
+                    .filter(|p| **p != doc.project)
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Entry {
+                doc,
+                place,
+                also_in,
+            }
+        })
+        .collect())
 }
 
 /// The lines that forbid, with their numbers: text, not frontmatter, not code, not headings.
@@ -92,18 +211,21 @@ fn prohibitions<'a>(d: &'a Doc, re: &Regex) -> Vec<(usize, &'a str)> {
         .collect()
 }
 
+/// The width of the place column: `codex-memory` is the longest.
+const PLACE: usize = 12;
+
 /// The text to print and the JSON lines. An error is a message for exit 3 (or 2).
 pub fn run(o: &RulesOpts) -> Result<(String, Vec<Value>), String> {
-    let docs = documents(o)?;
-    let mut per_file: Vec<(&Doc, Vec<(usize, &str)>)> = docs
+    let entries = documents(o)?;
+    let mut per_file: Vec<(&Entry, Vec<(usize, &str)>)> = entries
         .iter()
-        .map(|d| (d, prohibitions(d, &o.pattern)))
+        .map(|e| (e, prohibitions(&e.doc, &o.pattern)))
         .filter(|(_, v)| !v.is_empty())
         .collect();
     per_file.sort_by(|a, b| {
         b.1.len()
             .cmp(&a.1.len())
-            .then(a.0.shown().cmp(&b.0.shown()))
+            .then(a.0.doc.shown().cmp(&b.0.doc.shown()))
     });
     let total: usize = per_file.iter().map(|(_, v)| v.len()).sum();
 
@@ -114,37 +236,56 @@ pub fn run(o: &RulesOpts) -> Result<(String, Vec<Value>), String> {
         .max()
         .unwrap_or(1)
         .max("count".len());
-    out.push_str(&format!("{:>width$}  file\n", "count"));
-    for (d, v) in &per_file {
-        out.push_str(&format!("{:>width$}  {}\n", v.len(), d.shown()));
+    out.push_str(&format!("{:>width$}  {:<PLACE$}  file\n", "count", "place"));
+    for (e, v) in &per_file {
+        let mark = e.mark().map(|m| format!("  ({m})")).unwrap_or_default();
+        out.push_str(&format!(
+            "{:>width$}  {:<PLACE$}  {}{mark}\n",
+            v.len(),
+            e.place.name(),
+            e.doc.shown()
+        ));
     }
     out.push_str(&format!(
-        "{:>width$}  total ({} files with any, {} files read)\n",
+        "{:>width$}  {:<PLACE$}  total ({} files with any, {} files read)\n",
         total,
+        "",
         per_file.len(),
-        docs.len()
+        entries.len()
     ));
 
     let mut objects = Vec::new();
     if o.count {
-        for (d, v) in &per_file {
-            objects.push(
-                json!({"file": d.shown(), "path": d.path.to_string_lossy(), "count": v.len()}),
-            );
+        for (e, v) in &per_file {
+            objects.push(json!({
+                "file": e.doc.shown(),
+                "path": e.doc.path.to_string_lossy(),
+                "place": e.place.name(),
+                "also_in": e.also_in,
+                "count": v.len(),
+            }));
         }
-        objects.push(
-            json!({"total": total, "files_with_any": per_file.len(), "files_read": docs.len()}),
-        );
+        objects.push(json!({
+            "total": total,
+            "files_with_any": per_file.len(),
+            "files_read": entries.len(),
+        }));
         return Ok((out, objects));
     }
     out.push('\n');
-    for (d, v) in &per_file {
+    for (e, v) in &per_file {
+        let tag = match e.mark() {
+            Some(m) => format!("{}; {m}", e.place.name()),
+            None => e.place.name().to_string(),
+        };
         for (no, text) in v {
-            out.push_str(&format!("{}:{no}  {text}\n", d.shown()));
+            out.push_str(&format!("{}:{no}  [{tag}]  {text}\n", e.doc.shown()));
             objects.push(json!({
-                "source": d.source.name(),
-                "file": d.shown(),
-                "path": d.path.to_string_lossy(),
+                "source": e.doc.source.name(),
+                "file": e.doc.shown(),
+                "path": e.doc.path.to_string_lossy(),
+                "place": e.place.name(),
+                "also_in": e.also_in,
                 "line": no,
                 "text": text,
             }));

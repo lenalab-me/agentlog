@@ -13,7 +13,7 @@ agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時
 agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は search が claude、show が all）
 agentlog timeline --repo ~/project/prod/x --since 2026-10-01 --until 2026-10-03   # 発言とコミットを時刻順に（振り返り・引き継ぎ）
 agentlog memory '関所' --type feedback              # メモリのファイルから探す（必要なときに引く。毎回読むものではない）
-agentlog rules --repo . --count                     # この場所で始めたセッションが読む禁止ルールの本数（--json をモデルに渡して、ぶつかりを読ませる）
+agentlog rules --repo . --count                     # この場所で始めたセッションが読む禁止ルールの本数（--json をモデルに渡して、ぶつかりを読ませる。置き場所の列と、同じ名前のメモリが別のプロジェクトにある印つき）
 # 別の場所に写したログは、--root（Claude）と --codex-root（Codex。sessions と archived_sessions の2か所）で渡す
 agentlog search 'Planconfig' --raw                  # 控え（~/.cache/agentlog）を使わず、ログを直接読む（遅いが確実。控えが怪しいときの突き合わせ）
 ```

@@ -290,10 +290,12 @@ fn rules_count_prints_the_table_and_the_total_only() {
     let w = world();
     let (code, out, _) = agentlog(&w, &["rules", "--count"]);
     assert_eq!(code, 0);
-    assert!(out.starts_with("count  file\n"), "{out}");
+    assert!(out.starts_with("count  place         file\n"), "{out}");
     let first = out.lines().nth(1).unwrap();
     assert!(
-        first.trim_start().starts_with("2  net/feedback-a.md"),
+        first
+            .trim_start()
+            .starts_with("2  memory        net/feedback-a.md"),
         "{out}"
     );
     assert!(
@@ -382,4 +384,119 @@ fn flags_that_belong_to_another_command_are_refused() {
         ],
     );
     assert_eq!(code, 3, "{err}");
+}
+
+fn places(v: &[Value]) -> Vec<(String, String)> {
+    let mut p: Vec<(String, String)> = v
+        .iter()
+        .map(|o| {
+            (
+                o["file"].as_str().unwrap().to_string(),
+                o["place"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    p.sort();
+    p.dedup();
+    p
+}
+
+#[test]
+fn every_rule_line_says_where_its_file_lives() {
+    let w = world();
+    let repo = w.repo.to_str().unwrap();
+    let v = objects(&w, &["rules", "--repo", repo, "--source", "all"]);
+    let got = places(&v);
+    let place_of = |end: &str| -> String {
+        let hits: Vec<&(String, String)> = got.iter().filter(|(f, _)| f.ends_with(end)).collect();
+        assert_eq!(hits.len(), 1, "{end}: {got:?}");
+        hits[0].1.clone()
+    };
+    assert_eq!(place_of(".claude/CLAUDE.md"), "global");
+    assert_eq!(place_of(".codex/AGENTS.md"), "global");
+    assert_eq!(place_of("work/repo/AGENTS.md"), "repo");
+    assert_eq!(place_of("repo-only.md"), "memory");
+    assert_eq!(place_of("raw_memories.md"), "codex-memory");
+    // the table and the printed lines show it too
+    let (_, out, _) = agentlog(&w, &["rules", "--repo", repo, "--source", "all", "--count"]);
+    assert!(out.starts_with("count  place         file\n"), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.contains("codex-memory  codex/raw_memories.md")),
+        "{out}"
+    );
+    let (_, out, _) = agentlog(&w, &["rules", "--repo", repo, "--source", "all"]);
+    assert!(out.contains("[global]  - Never push"), "{out}");
+}
+
+fn also_in(v: &[Value], file: &str) -> Vec<String> {
+    let hits: Vec<&Value> = v
+        .iter()
+        .filter(|o| o["file"].as_str().unwrap().ends_with(file))
+        .collect();
+    assert!(!hits.is_empty(), "{file}: {v:?}");
+    let first = hits[0]["also_in"].as_array().unwrap();
+    for h in &hits {
+        assert_eq!(h["also_in"].as_array().unwrap(), first);
+    }
+    first
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_memory_of_the_same_name_in_another_project_is_marked_but_a_link_to_one_file_is_not() {
+    let w = world();
+    let projects = w.home.join(".claude/projects");
+    // beta holds a file of the same name as net's feedback-a.md
+    write(
+        &projects.join("-Users-t-project-prod-beta/memory/feedback-a.md"),
+        "---\nname: feedback-a\ndescription: b's own\nmetadata:\n  type: feedback\n---\nこれはしない。\n",
+    );
+    // gamma only links to net's project-b.md: one file, so no mark
+    session(
+        &projects,
+        "-Users-t-project-prod-gamma",
+        "/Users/t/project/prod/gamma",
+    );
+    let gamma = projects.join("-Users-t-project-prod-gamma/memory");
+    fs::create_dir_all(&gamma).unwrap();
+    symlink(
+        projects.join("-Users-t-project-prod-net/memory/project-b.md"),
+        gamma.join("project-b.md"),
+    )
+    .unwrap();
+
+    let v = objects(&w, &["rules"]);
+    assert_eq!(also_in(&v, "net/feedback-a.md"), ["beta"]);
+    assert_eq!(also_in(&v, "beta/feedback-a.md"), ["net"]);
+    assert!(also_in(&v, "net/project-b.md").is_empty());
+    assert!(also_in(&v, "beta/user-c.md").is_empty());
+    assert!(
+        v.iter()
+            .all(|o| !o["file"].as_str().unwrap().contains("gamma")),
+        "{v:?}"
+    );
+    // the text shows the mark on the table and on the line
+    let (_, out, _) = agentlog(&w, &["rules", "--count"]);
+    assert!(
+        out.lines()
+            .any(|l| l.contains("net/feedback-a.md  (also in: beta)")),
+        "{out}"
+    );
+    let (_, out, _) = agentlog(&w, &["rules"]);
+    assert!(out.contains("[memory; also in: net]  "), "{out}");
+
+    // narrowing to a repository still looks at every project for the other copies
+    let repo = w.repo.to_str().unwrap();
+    write(
+        &projects.join("-Users-t-project-prod-beta/memory/repo-only.md"),
+        "---\nname: repo-only\ndescription: d\nmetadata:\n  type: feedback\n---\n使わない。\n",
+    );
+    let v = objects(&w, &["rules", "--repo", repo]);
+    assert_eq!(also_in(&v, "repo-only.md"), ["beta"]);
+    // and --project narrows what is read but not what is compared with
+    let v = objects(&w, &["rules", "--project", "net"]);
+    assert_eq!(also_in(&v, "net/feedback-a.md"), ["beta"]);
 }
