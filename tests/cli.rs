@@ -1631,3 +1631,29 @@ fn timeline_needs_a_git_repository_and_says_so() {
     assert!(out.starts_with("0 items"), "{out}");
     assert!(out.contains(repo.to_str().unwrap()), "{out}");
 }
+
+/// Agents read the help with `head -40`: the summary (usage, examples, output and exit status, up
+/// to the blank line after "Exit status:") has to end within those lines, or the end is cut off.
+#[test]
+fn the_summary_of_the_help_fits_in_forty_lines() {
+    let out = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    let help = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = help.lines().collect();
+    let exit = lines
+        .iter()
+        .position(|l| l.starts_with("Exit status:"))
+        .expect("the help says the exit status");
+    let end = exit
+        + lines[exit..]
+            .iter()
+            .position(|l| l.trim().is_empty())
+            .unwrap_or(lines.len() - exit);
+    assert!(
+        end <= 40,
+        "the summary of the help takes {end} lines; `head -40` cuts off: {:?}",
+        &lines[40.min(end)..end]
+    );
+}

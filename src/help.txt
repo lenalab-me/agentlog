@@ -12,36 +12,32 @@ Usage:
   agentlog rules [--repo DIR] [--pattern RE] [--count] [--source S] [--codex-memories DIR]
 Every command takes:
   --since WHEN  --until WHEN  --project S  --exclude S  --json
-  --root DIR (Claude Code's logs, default ~/.claude/projects)
-  --include-self (run inside Claude Code, the running session is left out by default)
-  --since defaults to 14d, but to no limit for search and show (look back as far as needed).
+  --root DIR (Claude Code's logs, default ~/.claude/projects)  --include-self (the running session
+  is left out by default). --since defaults to 14d, but to no limit for search and show; memory
+  and rules read no time window.
   WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
 search, show and timeline also read Codex's logs: --source claude|codex|all (search, timeline:
   claude; show: all) and --codex-root DIR (repeat it; default ~/.codex/sessions and archived_sessions).
-search, show and timeline keep what they take from the logs in ~/.cache/agentlog ($XDG_CACHE_HOME),
-  so a later run reads only what was added. --raw reads the logs themselves instead (slow, certain:
-  use it when the cache looks wrong, or the log format has just changed). Deleting the folder is safe.
+search, show and timeline cache what they read in ~/.cache/agentlog ($XDG_CACHE_HOME, safe to
+  delete). --raw reads the logs themselves (slow, certain: when the cache looks wrong).
 
 Examples:
   agentlog repeats --since 2026-10-01               same failure in two or more places
   agentlog repeats --tool Bash -v                   with the commands (may hold secrets)
   agentlog tool rpatch --since 2026-10-06T23:57Z    did it fix itself, or go another way?
-  agentlog tool devsrv --since 2026-10-01           other ways per day, before and after
   agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
   agentlog search 'too loose' -i --who user         what was said, oldest first
-  agentlog search 'Planconfig' --source codex       only Codex's logs
   agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
   agentlog timeline --repo ~/project/prod/x --since 2026-10-01   what was said and committed
   agentlog memory '関所' --type feedback            look something up in the memory files
   agentlog rules --repo . --count                   how many prohibitions a session here reads
   agentlog rules --repo . --json                    give this to a model: do any of them collide?
-  agentlog search 'Planconfig' --raw                the same without the cache (to check it)
 
 Output: text tables; --json prints one JSON object instead (search, timeline: one object per
 hit, one per line). Commands appear only with -v/--examples, since they can hold credentials;
 show prints each tool call as a one-line note and never the result.
-Exit status: 0 ok (also with 0 hits); 2 invalid input, SESSION not found or not unique, or
---repo not a git repository (for rules: not a directory); 3 the log or memory directory cannot be read.
+Exit status: 0 ok (also with 0 hits); 2 invalid input, SESSION not found or not unique, or --repo
+not a git repository (rules: not a directory); 3 the log or memory directory cannot be read.
 
 search: one line per utterance that matches (the first match in it): local time, who
   (user, assistant, or task = a prompt the parent gave a subagent), source (claude or
