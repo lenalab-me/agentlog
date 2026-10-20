@@ -331,9 +331,11 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         ));
     }
     if common.raw && sub != "search" && sub != "show" && sub != "timeline" {
-        return Err(format!(
-            "--raw is for search, show and timeline; {sub} always reads the logs themselves"
-        ));
+        return Err(if on_memories {
+            format!("{sub} reads the memory files, not the logs; --raw does not apply")
+        } else {
+            format!("--raw is for search, show and timeline; {sub} always reads the logs themselves")
+        });
     }
     if repo.is_some() && sub != "timeline" && sub != "rules" {
         return Err(format!(

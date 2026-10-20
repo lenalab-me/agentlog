@@ -1,8 +1,10 @@
 # agentlog
 
-Claude Code のセッションログ（`~/.claude/projects/`）と Codex のセッションログ（`~/.codex/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`。Claude Code と Codex の両方）と、あるリポジトリの「利用者の発言」と「コミット」を時刻順に1本に並べること（`timeline`）もできる。数える `repeats`・`tool`・`daily` は Claude Code だけ。ログではなくメモリのファイルを引く `memory` と、禁止ルールの本数を数えて並べる `rules` もある。
+Claude Code のセッションログ（`~/.claude/projects/`）と Codex のセッションログ（`~/.codex/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`。Claude Code と Codex の両方を読める）と、あるリポジトリの「利用者の発言」と「コミット」を時刻順に1本に並べること（`timeline`）もできる。数える `repeats`・`tool`・`daily` は Claude Code だけ。ログではなくメモリのファイルを引く `memory` と、禁止ルールの本数を数えて並べる `rules` もある。
 
 個人で作り、Claude Code と Codex の作業の振り返りに使っている。動くのは macOS と Linux（Windows なら WSL2）。ほかの自作の道具（[rpatch](https://github.com/lenalab-me/rpatch)・[devsrv](https://github.com/lenalab-me/devsrv)）やスキルとまとめて入れる手順は、[harness-engineering の SETUP.md](https://github.com/lenalab-me/harness-engineering/blob/main/SETUP.md) にある。
+
+Rust 1.88 以上が要る。
 
 ```sh
 cargo install --locked --path .
@@ -22,7 +24,7 @@ agentlog search 'Planconfig' --raw                  # 控え（~/.cache/agentlog
 
 使い方の要約は `agentlog --help`（40 行以内。`head -40` で切られても要約は全部届く）。コマンドごとの詳しい説明は `agentlog help COMMAND`（`agentlog COMMAND --help` も同じ。`codex`・`cache` の節も引ける）、全文は `agentlog help all`。Claude Code の中から呼ぶと、そのセッション自身は数えない（`--include-self` で入れる）。
 
-`search`・`show`・`timeline` は、ログから読み取った会話の本文を `~/.cache/agentlog/`（`$XDG_CACHE_HOME`）に控えとして置く。ログが増えても、2 回目からは増えた分だけを読むので、全ログ（Claude 1.3 GB、Codex の写し 26 GB）でも 0.1 秒前後。控えは元のログから作り直せる写しで、消しても次の 1 回が遅くなるだけ。`--raw` で控えを使わずにログを直接読める（遅いが確実）。仕組みは `docs/design.md` の「控え」、怪しいときの確かめ方は `docs/recipes.md` の 4。
+`search`・`show`・`timeline` は、ログから読み取った会話の本文を `~/.cache/agentlog/`（`$XDG_CACHE_HOME`）に控えとして置く。ログが増えても、2 回目からは増えた分だけを読むので速い（1 回目は控えを作るので、ログの量に応じてかかる）。控えは元のログから作り直せる写しで、消しても次の 1 回が遅くなるだけ。`--raw` で控えを使わずにログを直接読める（遅いが確実）。仕組みは `docs/design.md` の「控え」、怪しいときの確かめ方は `docs/recipes.md` の 4。
 
 - [設計](docs/design.md): 文脈と呼び出し、失敗、シグネチャ、`repeats` と `tool` の数え方、プリセット、`search`・`show`・`timeline` の控え（キャッシュ）、未決と危険
 - [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る、振り返りで会話を探す、会話とコミットを並べて引き継ぎを書く、メモリを引く・禁止ルールを棚卸しする

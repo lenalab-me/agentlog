@@ -30,9 +30,9 @@ Examples:
   agentlog rules --repo . --count                   how many prohibitions a session here reads
   agentlog rules --repo . --json                    give this to a model: do any of them collide?
 
-Output: text tables; --json prints one JSON object instead (search, timeline: one object per
-hit, one per line). Commands appear only with -v/--examples, since they can hold credentials;
-show prints each tool call as a one-line note and never the result.
+Output: text tables; --json prints one JSON object instead (search, timeline: one per hit; memory:
+one per file; rules: one per line; each on its own line). Commands appear only with -v/--examples,
+since they can hold credentials; show prints each tool call as a one-line note, never the result.
 Exit status: 0 ok (also with 0 hits); 2 invalid input, SESSION not found or not unique, or --repo
 not a git repository (rules: not a directory); 3 the log or memory directory cannot be read.
 
@@ -73,7 +73,8 @@ memory: search the memory files, not the session logs: Claude Code's are
   folders show through a link is one hit, under the folder it really lives in (--json: also_in
   lists the others). Output: per file the project, file, type and description, then the matching
   lines as `NUMBER: text`; the count last. --json: one object per file. No window and no cache:
-  --since, --until and --raw do not apply.
+  --since and --until are ignored, and --raw is an error (exit 2: memory reads the memory files,
+  not the logs; --raw does not apply).
 
 rules: count the prohibitions in the memory files and list them, so that they can be read side
   by side. Whether two collide is for a person or a model to judge; nothing here guesses it.
@@ -82,8 +83,9 @@ rules: count the prohibitions in the memory files and list them, so that they ca
   to the same file counts once) and the memories of DIR's project. --source codex|all adds
   ~/.codex/AGENTS.md and Codex's memories. A prohibition is a line of text (not a heading, the
   frontmatter or a fenced code block) that matches --pattern RE; the default is loose
-  (しない しません 使わない 書かない 入れない 渡さない 提案しない 禁止 やめる 避ける, a sentence
-  ending in ない, never, don't, do not, must not, avoid), so some lines only mention one.
+  (しない しません 使わない 書かない 入れない 渡さない 提案しない 禁止 やめる 避ける ならない
+  してはいけ いけません 使うな, a sentence ending in ない, never, don't, do not, must not,
+  avoid; case ignored), so some lines only mention one.
   Output: lines per file, most first, and the total; then every line as `file:NUMBER  [place]  text`.
   --count stops after the total. --json: one object per line (with --count, one per file and a
   last one with the totals).
@@ -105,14 +107,15 @@ Codex logs (search, show and timeline; repeats, tool and daily read Claude Code'
   of one period share their first characters. show takes any part of an id (several fit:
   they are listed, exit 2). Roots: every --codex-root DIR, else those of ~/.codex/sessions
   and ~/.codex/archived_sessions that exist. For a copy kept elsewhere give both of its
-  directories, e.g. --codex-root ~/.local/share/agent-log-archive/codex/sessions
-  --codex-root ~/.local/share/agent-log-archive/codex/archived_sessions. One session
+  directories, e.g. --codex-root /path/to/copy/sessions
+  --codex-root /path/to/copy/archived_sessions. One session
   found in several places is read once, from the largest file (the first if equal).
   Not the user's words in a Codex log: what the app adds to a user message (browser and
   environment context, AGENTS.md, plugin lists, attachment lists, image tags, interrupts,
   subagent notices). Prompts in a subagent's session are task. Reasoning is left out.
   A forked subagent's file begins with copies of its parent's lines; they are skipped.
-  Lines that cannot be messages are not parsed: all 26 GB takes about 5 s.
+  Lines that cannot be messages are not parsed: reading 26 GB of them took about 5 s
+  (measured 2026-10-17).
 
 Cache (search, show, timeline): one file per log under ~/.cache/agentlog/<claude|codex>-<hash of
   the root>/, with the talk, a one-line note per tool call, the working directories of the

@@ -65,7 +65,7 @@ agentlog tool Edit --since 2026-10-01
 作る前の基準を残しておくと、後で比べやすい。
 
 ```sh
-agentlog daily --since 14d sleep='(^|[\s;&(])sleep\s+\d' loop='until\s[^\n]*sleep' --in input --json > ~/project/prod/<道具>-notes/baseline-$(date +%F).json
+agentlog daily --since 14d sleep='(^|[\s;&(])sleep\s+\d' loop='until\s[^\n]*sleep' --in input --json > baseline-$(date +%F).json
 ```
 
 ## 4. 振り返りで、前に何と言ったか・なぜそう決めたかを探す
@@ -75,7 +75,7 @@ agentlog daily --since 14d sleep='(^|[\s;&(])sleep\s+\d' loop='until\s[^\n]*slee
 ```sh
 agentlog search '切り分けすぎ' --who user                 # 自分が何と言ったか（古い順、新しい50件）
 agentlog search 'デプロイ|deploy' -i --since 30d         # どちらの言い方でも。30 日に絞る
-agentlog search 'D3' --project network-designer --who assistant
+agentlog search 'D3' --project web --who assistant
 agentlog show 1a2b3c4d --at '2026-10-02 14:25' --around 3   # 上で見つけた行の id と時刻
 agentlog show 1a2b3c4d --grep '切り分けすぎ' --around 5        # 時刻の代わりに、言葉で中心を決める
 ```
@@ -83,7 +83,7 @@ agentlog show 1a2b3c4d --grep '切り分けすぎ' --around 5        # 時刻の
 手順：
 
 1. **言い方を変えて 2〜3 回探す。** 正規表現なので、`A|B` や `-i` が使える。一致が多すぎれば `--who user`（自分の言葉だけ）、`--project`、`--since` / `--until` で絞る。切れたとき（`N hits; the newest …`）は、古い方が落ちているので `--until` で区切って見る。
-2. **行から決める。** 一覧は `時刻  誰  id  プロジェクト | 前後40文字`。`user` の行が「何と言ったか」、その直後の `assistant` が「どう受け取ったか」。決めた理由は、たいてい直前の assistant の提案（選択肢）と、それへの返事の組。
+2. **行から決める。** 一覧は `時刻  誰  source  id  プロジェクト | 前後40文字`。`user` の行が「何と言ったか」、その直後の `assistant` が「どう受け取ったか」。決めた理由は、たいてい直前の assistant の提案（選択肢）と、それへの返事の組。
 3. **`show` で前後を読む。** `show <id> --at '<時刻>'`（`search` の行そのまま）。中心の発言に `>>` が付く。`--around` を増やすと広がる。ツールの呼び出しは1行（`[Bash] …`）で、何をしていたかの流れは分かるが、結果は出ない。結果が要るときは、`daily` などで探す。
 4. **サブエージェントの中は `親/子` で。** 一覧の id が `aaaaaaaa/bbbbbbbb` なら、それをそのまま `show` に渡す。`who` が `task` の行は、親が子に渡した依頼文（人の発言ではない）。T3 Code の依頼文も `task` に入る。
 
@@ -91,25 +91,25 @@ agentlog show 1a2b3c4d --grep '切り分けすぎ' --around 5        # 時刻の
 
 - `show` は、実行中のセッション（`CLAUDE_CODE_SESSION_ID`）も指定されれば読む。`search` は既定で実行中のセッションを外す（探している言葉が、探している最中の発言に出るため）。入れるには `--include-self`。
 - 再開したセッションは、前の会話が写されて同じ発言が2つ出ることがある。時刻と中身が同じなら同じもの。
-- 引用するときは、本物の発言の写しを文書やコミットに残さない（`harness-engineering` の決まり）。件数と、自分の言葉での要約にする。
+- 引用するときは、ログから抜き出した本物の発言（コマンドや出力を含む）を、公開するリポジトリの文書やコミットに残さない。認証情報や内部のホスト名が入りうるため（[harness-engineering](https://github.com/lenalab-me/harness-engineering) の決まり）。件数と、自分の言葉での要約にする。
 
 ### Codex の会話も探す
 
-`search` と `show` は、既定で Claude Code と Codex の両方を読む（一覧の `claude` / `codex` の列で見分ける）。片方だけなら `--source claude` / `--source codex`。使い方は同じだが、次の点がちがう。
+`show` は、既定で Claude Code と Codex の両方を読む（一覧の `claude` / `codex` の列で見分ける）。`search` と `timeline` は、頼んだときだけ Codex も読む（`--source codex|all` か `--codex-root` を付ける。付けないと Claude のログだけ）。片方だけなら `--source claude` / `--source codex`。使い方は同じだが、次の点がちがう。
 
 ```sh
 agentlog search 'デプロイ|deploy' -i --source codex --since 2026-09-01   # Codex のログだけ
 agentlog show 3c4d5e6f --grep 'デプロイ'                                  # Codex の id は末尾 8 文字
 # 別の場所に写してあるログ（sessions と archived_sessions の2か所を渡す。Claude 側は --root）
 agentlog search 'デプロイ' --source codex \
-  --codex-root ~/.local/share/agent-log-archive/codex/sessions \
-  --codex-root ~/.local/share/agent-log-archive/codex/archived_sessions
+  --codex-root /path/to/copy/sessions \
+  --codex-root /path/to/copy/archived_sessions
 ```
 
 - **id は末尾 8 文字.** Codex の id は先頭が時刻なので、同じ時期のセッションは先頭が同じ。`show` は id の**どの部分でも**受け付ける。複数に当たれば候補（`id  source  時刻  プロジェクト`）が出る。
-- **写しは両方の置き場所を渡す.** 片方だけだと、アーカイブ済みのセッションか、まだアーカイブされていないセッションが抜ける。本物と写しの両方を渡しても、同じ id のセッションは 1 つだけ読む（大きいほう）。
-- **`--project` は作業ディレクトリ名.** Codex にはフォルダ名がなく、セッションの `cwd` から作った名前（`net/designer` など）に含まれるかで選ぶ。
-- **全期間でも、2 回目からは 0.1 秒ほど.** 全ログ（26 GB）の最初の `search` は、控えを作るので 6〜8 秒かかる（`--raw`、つまり控えなしだと毎回 5 秒ほど）。2 回目からは控え（約 50 MB）だけを読むので 0.1 秒前後。控えの仕組みと確かめ方は下の「控えが怪しいとき」。
+- **別の場所に写したログは、両方の置き場所を渡す.** 片方だけだと、アーカイブ済みのセッションか、まだアーカイブされていないセッションが抜ける。本物と写しの両方を渡しても、同じ id のセッションは 1 つだけ読む（大きいほう）。
+- **`--project` は作業ディレクトリ名.** Codex にはフォルダ名がなく、セッションの `cwd` から作った名前（`shop/web` など。ホームと先頭の `project/prod/` を落とした形）に含まれるかで選ぶ。
+- **全期間でも、2 回目からは速い.** 最初の `search` は控えを作るので、ログの量に応じて時間がかかる（`--raw`、つまり控えなしだと毎回その分かかる）。2 回目からは控えだけを読むので速い。測った数字は `docs/design.md` の「速さ」（2026-10-17 の測定）。控えの仕組みと確かめ方は下の「控えが怪しいとき」。
 - **Codex の `user` は、アプリが足した文を除いてある.** 添付の一覧、ブラウザの状態、AGENTS.md、サブエージェントの通知など。見分け方は `docs/design.md` の「Codex のログ」。サブエージェントのセッションの依頼は `task`。
 
 ### 控えが怪しいとき
@@ -131,7 +131,7 @@ rm -rf ~/.cache/agentlog
 ```
 
 - `--raw` は控えを読まず、書かない。`show`・`timeline` にも付く（`diff` の相手に使う）。
-- 控えのフォルダは、消しても安全（元のログから作り直せる写し。作り直しは Claude で 1 秒ほど、Codex の写しで 6〜8 秒）。ログのほうは消さない。
+- 控えのフォルダは、消しても安全（元のログから作り直せる写し。作り直しにかかる時間はログの量で変わる。2026-10-17 の測定では、Claude 1.3 GB で 1 秒ほど、Codex 26 GB で 6〜8 秒）。ログのほうは消さない。
 - ログを書き換えた・別の場所に置き直したときは、控えは使われずに作り直される（見分けが変わるため）。同じ場所で中身だけ書き換えて、大きさも更新時刻も変えなかったときだけは、控えを信じてしまう。
 - 実行中のセッションのログは、今この瞬間に書いている最後の行を、次の実行まで待つ（改行まで書き終わっていない行は読まない。`--raw` でも同じ）。
 
@@ -152,9 +152,9 @@ git -C ~/project/prod/x show 1a2b3c4                                            
 2. **発言とコミットの並びで、節目を探す。** 利用者の発言（方針、選択肢への返事、「それはやめよう」）のあとに、どんなコミットが続いたか。方針の変更は、発言の直後のコミットの件名に出る。コミットのない長い発言の連なりは、議論だけで終わった（実装されていない）決定。
 3. **決めた理由が要るところで `show`。** 行の id と時刻（`2026-10-02 14:25`）をそのまま `show` に渡すと、前後の会話が読める。assistant が出した選択肢と、それへの利用者の返事が、理由になる。
 4. **コミットは `git show` で確かめる。** 件名が実際の変更を言っているかは、中身を見る。
-5. **書くときは、本物の発言と件名を写さない。** 日付と、自分の言葉での要約にする（`harness-engineering` の決まり）。
+5. **書くときは、本物の発言と件名を写さない。** 日付と、自分の言葉での要約にする（ログから抜き出したものを公開するリポジトリに残さない、[harness-engineering](https://github.com/lenalab-me/harness-engineering) の決まり）。
 
-どのセッションが並ぶかは `--repo` から決まる：リポジトリの中（と、その作業ツリー、T3 Code が作って消した作業ツリー）で主に作業したセッション。`~/project/prod/network` のような親のフォルダで開いたセッションも、作業が `network-designer` の側にあれば入る（親のフォルダにいた行は数えない）。別のリポジトリにまたがるセッションは、作業の半分以上がこちら側なら全部入る：その日に絞るか、`--project` で名前から選ぶ。リポジトリの外（スクラッチなど）でそのリポジトリの話をした会話は入らないので、`agentlog search` で足す。
+どのセッションが並ぶかは `--repo` から決まる：リポジトリの中（と、その作業ツリー、T3 Code が作って消した作業ツリー）で主に作業したセッション。`~/project/prod/shop` のような親のフォルダで開いたセッションも、作業が `shop/web` の側にあれば入る（親のフォルダにいた行は数えない）。別のリポジトリにまたがるセッションは、作業の半分以上がこちら側なら全部入る：その日に絞るか、`--project` で名前から選ぶ。リポジトリの外（スクラッチなど）でそのリポジトリの話をした会話は入らないので、`agentlog search` で足す。
 
 見方：
 
@@ -169,7 +169,7 @@ git -C ~/project/prod/x show 1a2b3c4                                            
 
 ```sh
 agentlog memory '関所' --type feedback             # 「なぜそうしているか」を、メモリの本文から
-agentlog memory 'worktree' -i --project designer     # そのプロジェクトのメモリだけ
+agentlog memory 'worktree' -i --project web     # そのプロジェクトのメモリだけ
 agentlog memory '禁止' --index                       # 索引（MEMORY.md）も含める
 agentlog rules --repo . --count                      # このディレクトリで始めたセッションが読む禁止の本数と、ファイルごとの内訳
 agentlog rules --repo . --json                       # 1 行 1 件。モデルに渡して、互いにぶつかる禁止がないか読ませる
