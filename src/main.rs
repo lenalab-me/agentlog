@@ -5,6 +5,7 @@ mod cache;
 mod cli;
 mod codex;
 mod commands;
+mod help;
 mod lines;
 mod load;
 mod memory;
@@ -34,10 +35,16 @@ fn main() {
     };
     let c = &parsed.common;
     match &parsed.cmd {
-        Cmd::Help => {
-            print!("{}", cli::HELP);
-            return;
-        }
+        Cmd::Help(name) => match help::render(name.as_deref()) {
+            Ok(text) => {
+                print!("{text}");
+                return;
+            }
+            Err(e) => {
+                eprintln!("agentlog: {e}");
+                std::process::exit(2);
+            }
+        },
         Cmd::Version => {
             println!("agentlog {}", env!("CARGO_PKG_VERSION"));
             return;
@@ -73,7 +80,7 @@ fn main() {
         Cmd::Repeats(o) => commands::repeats(&log, &w, o),
         Cmd::Tool(spec, o) => commands::tool(&log, &w, spec, o),
         Cmd::Daily(o) => commands::daily(&log, &w, o),
-        Cmd::Help
+        Cmd::Help(_)
         | Cmd::Version
         | Cmd::Search(_)
         | Cmd::Show(..)

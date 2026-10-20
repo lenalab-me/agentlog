@@ -43,6 +43,8 @@ devsrv
 
 読み方は `docs/recipes.md`。
 
+**help は 2 段。** エージェントは `agentlog --help | head -40` のように先頭だけを読むことが多く、何行で切るかは呼ぶ側で決められない。そこで `--help`（`-h`・`help`・引数なし）は要約だけ（使い方・例・出力・終了コードと、詳しい説明の引き方の案内）を出し、全体で 40 行以内に収める（`tests/cli.rs`）。詳しい説明は `agentlog help COMMAND`（`agentlog COMMAND --help` も同じ）で引き、`agentlog help all` が全文。文章の正本は `src/help.txt` の 1 ファイルで、要約は「先頭から `Exit status:` の段落が終わる空行まで」、それ以降は「空行のあとの行頭の見出し」から次の見出しの前までが 1 つの節（`src/help.rs`）。名前と節の対応は `src/help.rs` の `TOPICS` の 1 か所だけで、どの名前でも引けない節があるとテストが落ちる。知らない名前は終了コード 2。
+
 ## 形
 
 ### 文脈と呼び出し

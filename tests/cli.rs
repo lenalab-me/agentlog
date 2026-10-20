@@ -1632,28 +1632,149 @@ fn timeline_needs_a_git_repository_and_says_so() {
     assert!(out.contains(repo.to_str().unwrap()), "{out}");
 }
 
-/// Agents read the help with `head -40`: the summary (usage, examples, output and exit status, up
-/// to the blank line after "Exit status:") has to end within those lines, or the end is cut off.
-#[test]
-fn the_summary_of_the_help_fits_in_forty_lines() {
-    let out = Command::new(env!("CARGO_BIN_EXE_agentlog"))
-        .arg("--help")
+fn agentlog(args: &[&str]) -> (Option<i32>, String, String) {
+    let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+        .args(args)
         .output()
         .unwrap();
-    let help = String::from_utf8(out.stdout).unwrap();
-    let lines: Vec<&str> = help.lines().collect();
+    (
+        o.status.code(),
+        String::from_utf8(o.stdout).unwrap(),
+        String::from_utf8(o.stderr).unwrap(),
+    )
+}
+
+const HELP_TXT: &str = include_str!("../src/help.txt");
+
+/// The headings of help.txt: lines not indented, after the summary.
+fn help_headings() -> Vec<&'static str> {
+    let lines: Vec<&str> = HELP_TXT.lines().collect();
     let exit = lines
         .iter()
         .position(|l| l.starts_with("Exit status:"))
-        .expect("the help says the exit status");
-    let end = exit
-        + lines[exit..]
-            .iter()
-            .position(|l| l.trim().is_empty())
-            .unwrap_or(lines.len() - exit);
+        .unwrap();
+    let blank = exit + lines[exit..].iter().position(|l| l.is_empty()).unwrap();
+    let mut out = Vec::new();
+    for i in blank + 1..lines.len() {
+        if !lines[i].is_empty() && !lines[i].starts_with(' ') {
+            assert!(
+                lines[i - 1].is_empty(),
+                "help.txt: `{}` is not indented but follows a line; a heading needs a blank line before it",
+                lines[i]
+            );
+            out.push(lines[i]);
+        }
+    }
+    out
+}
+
+/// Agents read the help with `head -40`: `--help` is the summary (usage, examples, output and exit
+/// status) and a pointer to the rest, and all of it has to fit in those lines.
+#[test]
+fn the_summary_of_the_help_fits_in_forty_lines() {
+    for args in [&["--help"][..], &["-h"], &["help"], &[]] {
+        let (code, out, _) = agentlog(args);
+        assert_eq!(code, Some(0));
+        let n = out.lines().count();
+        assert!(
+            n <= 40,
+            "`agentlog {args:?}` prints {n} lines; `head -40` cuts off:\n{out}"
+        );
+        assert!(
+            out.contains("Exit status:") && out.contains("agentlog help all"),
+            "{out}"
+        );
+    }
+}
+
+#[test]
+fn help_for_a_command_has_its_section_and_not_the_others() {
+    let (code, out, _) = agentlog(&["help", "rules"]);
+    assert_eq!(code, Some(0));
+    assert!(out.contains("agentlog rules [--repo DIR]"), "{out}");
+    assert!(out.contains("\nrules: count the prohibitions"), "{out}");
+    assert!(!out.contains("search: one line per utterance"), "{out}");
+    assert!(!out.contains("Examples:"), "{out}");
+    // repeats, tool and daily share the section that says what is counted.
+    let (_, out, _) = agentlog(&["help", "tool"]);
     assert!(
-        end <= 40,
-        "the summary of the help takes {end} lines; `head -40` cuts off: {:?}",
-        &lines[40.min(end)..end]
+        out.contains("agentlog tool NAME") && out.contains("[--escape-tool T,T]"),
+        "{out}"
     );
+    assert!(
+        out.contains("What it counts") && out.contains("Presets: rpatch"),
+        "{out}"
+    );
+    assert!(!out.contains("agentlog daily"), "{out}");
+    // search points to the Codex and cache sections; they are asked for by name.
+    let (_, out, _) = agentlog(&["help", "search"]);
+    assert!(
+        out.contains("agentlog help codex") && out.contains("agentlog help cache"),
+        "{out}"
+    );
+    let (_, out, _) = agentlog(&["help", "codex"]);
+    assert!(out.starts_with("Codex logs"), "{out}");
+}
+
+#[test]
+fn command_dash_dash_help_is_help_for_the_command() {
+    for name in [
+        "repeats", "tool", "daily", "search", "show", "timeline", "memory", "rules",
+    ] {
+        let (code, out, _) = agentlog(&["help", name]);
+        assert_eq!(code, Some(0));
+        assert_eq!(
+            agentlog(&[name, "--help"]),
+            (Some(0), out.clone(), String::new()),
+            "{name}"
+        );
+        assert_eq!(
+            agentlog(&[name, "-h"]),
+            (Some(0), out, String::new()),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn help_all_is_the_whole_of_help_txt() {
+    let (code, out, _) = agentlog(&["help", "all"]);
+    assert_eq!(code, Some(0));
+    assert_eq!(out, HELP_TXT);
+}
+
+#[test]
+fn help_for_an_unknown_name_says_so_and_lists_the_names() {
+    let (code, out, err) = agentlog(&["help", "foo"]);
+    assert_eq!(code, Some(2));
+    assert!(out.is_empty());
+    let first = err.lines().next().unwrap();
+    assert!(
+        first.contains("`foo`") && first.contains("rules") && first.contains("cache"),
+        "{err}"
+    );
+    assert_eq!(agentlog(&["help", "a", "b"]).0, Some(2));
+}
+
+/// A section of help.txt that no name asks for would be written but never read.
+#[test]
+fn every_section_of_help_txt_is_asked_for_by_some_name() {
+    let (_, _, err) = agentlog(&["help", "foo"]);
+    let list = err.lines().next().unwrap().split("try: ").nth(1).unwrap();
+    let names: Vec<&str> = list.split(", ").filter(|n| *n != "all").collect();
+    assert!(names.len() >= 8, "{names:?}");
+    let mut shown = String::new();
+    for name in names {
+        let (code, out, _) = agentlog(&["help", name]);
+        assert_eq!(code, Some(0), "{name}");
+        shown.push_str(&out);
+    }
+    let headings = help_headings();
+    assert!(headings.len() >= 8, "{headings:?}");
+    for h in headings {
+        assert!(
+            shown.lines().any(|l| l == h),
+            "no name of `agentlog help` prints the section `{h}`"
+        );
+    }
 }

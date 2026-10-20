@@ -4,6 +4,9 @@
 
 測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
 
+## help を 2 段にする（2026-10-20、ブランチ `help-split`。main への取り込みと `cargo install` はまだ）
+エージェントが `--help | head -40` のように先頭だけを読むので、`--help` を要約だけ（40 行以内、案内つき）にし、詳しい説明は `agentlog help COMMAND`・`agentlog COMMAND --help`、全文は `agentlog help all` で引くようにした。正本は今までどおり `src/help.txt` 1 ファイル。切り分けと名前の対応（`TOPICS`）は `src/help.rs`。節の見出しは空行のあとの行頭の行なので、`help.txt` に節を足すときは前に空行を入れ、`TOPICS` に名前を足す（足し忘れるとテスト `every_section_of_help_txt_is_asked_for_by_some_name` が落ちる。対応から外して落ちることを確かめた）。要約を 40 行に収めるため、「Every command takes」と Codex・控えの 2 段落をまとめ、Codex の節と Cache の節に補足（`--source` の既定、`--raw`）を移した。
+
 ## memory と rules：メモリを引く、禁止ルールを棚卸しする（2026-10-20、ブランチ `memory-rules`。main への取り込みと `cargo install` はまだ）
 
 `agentlog memory REGEX`（メモリのファイルから探す。必要なときに引く）と `agentlog rules [--repo DIR]`（禁止ルールの本数を数えて並べる）。禁止が複数あると互いにぶつかって振る舞いがおかしくなることがあるため、本数を知り、`--json` をモデルに渡して読ませる。ぶつかりの判定は意味の判断なので機械ではしない。仕様は `docs/design.md` の「memory と rules」、使い方は `docs/recipes.md` の 6、`src/help.txt`。

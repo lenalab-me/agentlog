@@ -12,6 +12,7 @@ use std::fs;
 const NOT_READERS: &[&str] = &[
     "cli.rs",
     "commands.rs",
+    "help.rs",
     "load.rs",
     "main.rs",
     "memory.rs",

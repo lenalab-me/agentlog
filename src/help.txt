@@ -11,15 +11,12 @@ Usage:
   agentlog memory REGEX [-i] [--type T] [--index] [--source S] [--codex-memories DIR]
   agentlog rules [--repo DIR] [--pattern RE] [--count] [--source S] [--codex-memories DIR]
 Every command takes:
-  --since WHEN  --until WHEN  --project S  --exclude S  --json
-  --root DIR (Claude Code's logs, default ~/.claude/projects)  --include-self (the running session
-  is left out by default). --since defaults to 14d, but to no limit for search and show; memory
-  and rules read no time window.
+  --since WHEN  --until WHEN  --project S  --exclude S  --json  --root DIR (default ~/.claude/projects)
+  --include-self (the running session is left out). --since defaults to 14d, none for search and
+  show; memory and rules read no time window.
   WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-06T23:57Z, or 14d / 6h ago.
-search, show and timeline also read Codex's logs: --source claude|codex|all (search, timeline:
-  claude; show: all) and --codex-root DIR (repeat it; default ~/.codex/sessions and archived_sessions).
-search, show and timeline cache what they read in ~/.cache/agentlog ($XDG_CACHE_HOME, safe to
-  delete). --raw reads the logs themselves (slow, certain: when the cache looks wrong).
+search, show and timeline also read Codex's logs (--source claude|codex|all: show all, the others
+  claude; --codex-root DIR) and cache what they read in ~/.cache/agentlog (safe to delete; --raw: no cache).
 
 Examples:
   agentlog repeats --since 2026-10-01               same failure in two or more places
@@ -47,11 +44,13 @@ search: one line per utterance that matches (the first match in it): local time,
   the harness adds. id is 8 characters of the session, or SESSION/AGENT for a Claude
   subagent. Project is the session's first working directory, without home and
   project/prod/. -i ignores case.
+
 show: SESSION is an id or its first characters (several fit: they are listed, exit 2).
   It prints the utterances in order, tool calls as `[Bash] first line…`. --grep RE (first
   utterance that matches) or --at TIME (nearest; to the minute covers the minute) picks
   one, and --around N shows N utterances either side; neither: the whole session.
   Utterances are cut at 2000 characters unless --full.
+
 timeline: what was said and what was committed in one list, oldest first, so a review or a
   handoff reads as it happened. --repo DIR is a git repository (required). A line is the local
   time, user|commit (--who any adds assistant and task), the session id (left blank while the
@@ -75,6 +74,7 @@ memory: search the memory files, not the session logs: Claude Code's are
   lists the others). Output: per file the project, file, type and description, then the matching
   lines as `NUMBER: text`; the count last. --json: one object per file. No window and no cache:
   --since, --until and --raw do not apply.
+
 rules: count the prohibitions in the memory files and list them, so that they can be read side
   by side. Whether two collide is for a person or a model to judge; nothing here guesses it.
   Default: Claude Code's memories (MEMORY.md left out, a linked file once). --repo DIR: what a
@@ -99,6 +99,8 @@ rules: count the prohibitions in the memory files and list them, so that they ca
   person or a model to find; nothing here judges it.
 
 Codex logs (search, show and timeline; repeats, tool and daily read Claude Code's logs only):
+  --source claude|codex|all: search and timeline read claude unless asked (or given --codex-root),
+  show reads all. --codex-root DIR can be repeated.
   A Codex id is the LAST 8 characters of the session: ids start with a time, so sessions
   of one period share their first characters. show takes any part of an id (several fit:
   they are listed, exit 2). Roots: every --codex-root DIR, else those of ~/.codex/sessions
@@ -120,7 +122,8 @@ Cache (search, show, timeline): one file per log under ~/.cache/agentlog/<claude
   caches of logs that are gone are removed. Where nothing can be written, the logs are read.
   A build that reads logs differently finds the old caches stale (the build hashes the sources
   that read them) and makes them again. Only you can read the folder (0700, files 0600).
-  The window, --project, --exclude and the running-session rule apply after the cache.
+  The window, --project, --exclude and the running-session rule apply after the cache. --raw
+  reads the logs themselves (slow, certain: when the cache looks wrong).
 
 What it counts (repeats, tool, daily):
   Each session file and each subagent file is one context (a subagent starts empty, so

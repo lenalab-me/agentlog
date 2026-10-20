@@ -14,10 +14,9 @@ use crate::rules::{DEFAULT_PATTERN, RulesOpts};
 use crate::time;
 use crate::timeline::TimelineOpts;
 
-pub const HELP: &str = include_str!("help.txt");
-
 pub enum Cmd {
-    Help,
+    /// `help [NAME]` or `NAME --help`: the summary, or what `help::render` makes of the name.
+    Help(Option<String>),
     Version,
     Repeats(RepeatsOpts),
     Tool(Spec, ToolOpts),
@@ -160,9 +159,9 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 .ok_or_else(|| format!("{flag} needs a value\n{USAGE}"))
         };
         match flag.as_str() {
-            "-h" | "--help" | "help" if pos.is_empty() => {
+            "-h" | "--help" => {
                 return Ok(Parsed {
-                    cmd: Cmd::Help,
+                    cmd: Cmd::Help(pos.first().cloned()),
                     common,
                 });
             }
@@ -268,10 +267,18 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     }
     let Some(sub) = pos.first().cloned() else {
         return Ok(Parsed {
-            cmd: Cmd::Help,
+            cmd: Cmd::Help(None),
             common,
         });
     };
+    if sub == "help" {
+        let cmd = match &pos[1..] {
+            [] => Cmd::Help(None),
+            [name] => Cmd::Help(Some(name.clone())),
+            _ => return Err(format!("help takes one name\n{USAGE}")),
+        };
+        return Ok(Parsed { cmd, common });
+    }
     // Looking back for a conversation may reach far; the other reports want recent calls.
     if (sub == "search" || sub == "show") && !since_given {
         common.since = 0;
