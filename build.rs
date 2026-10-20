@@ -14,8 +14,10 @@ const NOT_READERS: &[&str] = &[
     "commands.rs",
     "load.rs",
     "main.rs",
+    "memory.rs",
     "needle.rs",
     "recall.rs",
+    "rules.rs",
     "sig.rs",
     "timeline.rs",
 ];

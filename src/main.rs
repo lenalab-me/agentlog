@@ -7,8 +7,10 @@ mod codex;
 mod commands;
 mod lines;
 mod load;
+mod memory;
 mod needle;
 mod recall;
+mod rules;
 mod sig;
 mod talk;
 mod time;
@@ -52,6 +54,8 @@ fn main() {
         Cmd::Search(o) => return search(c, &filter, o),
         Cmd::Show(session, o) => return show(c, &filter, session, o),
         Cmd::Timeline(o) => return timeline(c, &filter, o),
+        Cmd::Memory(sc, o) => return memory(c, sc, o),
+        Cmd::Rules(o) => return rules(c, o),
         _ => {}
     }
     let log = match load::load(&c.root, &filter) {
@@ -69,9 +73,13 @@ fn main() {
         Cmd::Repeats(o) => commands::repeats(&log, &w, o),
         Cmd::Tool(spec, o) => commands::tool(&log, &w, spec, o),
         Cmd::Daily(o) => commands::daily(&log, &w, o),
-        Cmd::Help | Cmd::Version | Cmd::Search(_) | Cmd::Show(..) | Cmd::Timeline(_) => {
-            unreachable!()
-        }
+        Cmd::Help
+        | Cmd::Version
+        | Cmd::Search(_)
+        | Cmd::Show(..)
+        | Cmd::Timeline(_)
+        | Cmd::Memory(..)
+        | Cmd::Rules(_) => unreachable!(),
     };
     if c.json {
         println!("{json}");
@@ -156,6 +164,39 @@ fn search(c: &cli::Common, filter: &load::Filter, o: &recall::SearchOpts) {
         print!("{text}");
         if let Some(n) = note {
             println!("{n}");
+        }
+    }
+}
+
+fn memory(c: &cli::Common, sc: &memory::Scope, o: &memory::MemoryOpts) {
+    let docs = memory::collect(sc).unwrap_or_else(|e| {
+        eprintln!("agentlog: {e}");
+        std::process::exit(3);
+    });
+    let (text, objects, _) = memory::search(&docs, o);
+    if c.json {
+        for v in &objects {
+            println!("{v}");
+        }
+    } else {
+        print!("{text}");
+    }
+}
+
+fn rules(c: &cli::Common, o: &rules::RulesOpts) {
+    match rules::run(o) {
+        Ok((text, objects)) => {
+            if c.json {
+                for v in &objects {
+                    println!("{v}");
+                }
+            } else {
+                print!("{text}");
+            }
+        }
+        Err(e) => {
+            eprintln!("agentlog: {e}");
+            std::process::exit(if e.starts_with("--repo") { 2 } else { 3 });
         }
     }
 }

@@ -7,8 +7,10 @@ use regex_lite::{Regex, RegexBuilder};
 
 use crate::codex;
 use crate::commands::{DailyOpts, Field, PRESETS, RepeatsOpts, Spec, ToolOpts, preset};
+use crate::memory::{MemoryOpts, Scope};
 use crate::needle::Prefilter;
 use crate::recall::{SearchOpts, ShowOpts, WhoFilter};
+use crate::rules::{DEFAULT_PATTERN, RulesOpts};
 use crate::time;
 use crate::timeline::TimelineOpts;
 
@@ -24,6 +26,8 @@ pub enum Cmd {
     /// The session (an id or its start) and what to show of it.
     Show(String, ShowOpts),
     Timeline(TimelineOpts),
+    Memory(Scope, MemoryOpts),
+    Rules(RulesOpts),
 }
 
 /// `--source`: which agents' logs `search` and `show` read.
@@ -63,7 +67,7 @@ pub struct Parsed {
     pub common: Common,
 }
 
-const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION|timeline --repo DIR [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
+const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION|timeline --repo DIR|memory REGEX|rules [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
 
 fn regex(flag: &str, s: &str) -> Result<Regex, String> {
     Regex::new(s).map_err(|e| format!("{flag}: not a regex: {e}"))
@@ -128,6 +132,11 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     let mut at: Option<(i64, i64)> = None;
     let mut around = 5;
     let mut full = false;
+    let mut mtype: Option<String> = None;
+    let mut index = false;
+    let mut count = false;
+    let mut pattern: Option<String> = None;
+    let mut codex_memories: Option<PathBuf> = None;
     let (mut uses, mut fail, mut alt, mut escape, mut ignore) = (None, None, None, None, None);
     let mut alt_tools: Option<Vec<String>> = None;
     let mut escape_tools: Option<Vec<String>> = None;
@@ -224,6 +233,11 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 })
             }
             "--repo" => repo = Some(PathBuf::from(value(&mut it)?)),
+            "--type" => mtype = Some(value(&mut it)?.to_lowercase()),
+            "--index" => index = true,
+            "--count" => count = true,
+            "--pattern" => pattern = Some(value(&mut it)?),
+            "--codex-memories" => codex_memories = Some(PathBuf::from(value(&mut it)?)),
             "--limit" => limit = number("--limit", &value(&mut it)?)?,
             "--around" => around = number("--around", &value(&mut it)?)?,
             "--grep" => grep = Some(value(&mut it)?),
@@ -267,6 +281,8 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     // left out there.
     if !include_self
         && sub != "show"
+        && sub != "memory"
+        && sub != "rules"
         && let Ok(id) = std::env::var("CLAUDE_CODE_SESSION_ID")
         && !id.is_empty()
     {
@@ -279,9 +295,32 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         && sub != "search"
         && sub != "show"
         && sub != "timeline"
+        && sub != "memory"
+        && sub != "rules"
     {
         return Err(format!(
             "--source and --codex-root are for search, show and timeline; {sub} reads Claude Code's logs only"
+        ));
+    }
+    let on_memories = sub == "memory" || sub == "rules";
+    if on_memories && common.codex_roots_given {
+        return Err(format!(
+            "--codex-root is for session logs; {sub} reads memory files (--codex-memories DIR)"
+        ));
+    }
+    if codex_memories.is_some() && !on_memories {
+        return Err(format!(
+            "--codex-memories is for memory and rules; {sub} does not take it"
+        ));
+    }
+    if (mtype.is_some() || index) && sub != "memory" {
+        return Err(format!(
+            "--type and --index are for memory; {sub} does not take them"
+        ));
+    }
+    if (count || pattern.is_some()) && sub != "rules" {
+        return Err(format!(
+            "--count and --pattern are for rules; {sub} does not take them"
         ));
     }
     if common.raw && sub != "search" && sub != "show" && sub != "timeline" {
@@ -289,13 +328,18 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--raw is for search, show and timeline; {sub} always reads the logs themselves"
         ));
     }
-    if repo.is_some() && sub != "timeline" {
-        return Err(format!("--repo is for timeline; {sub} does not take it"));
+    if repo.is_some() && sub != "timeline" && sub != "rules" {
+        return Err(format!(
+            "--repo is for timeline and rules; {sub} does not take it"
+        ));
     }
     // Codex's logs are 20 times Claude's (5 s against 0.4 s to read them all) and no longer
     // grow, so search (and timeline) read them when asked. show finds a Codex id by its file
     // name, cheaply.
-    if (sub == "search" || sub == "timeline") && !source_given && !common.codex_roots_given {
+    if (sub == "search" || sub == "timeline" || on_memories)
+        && !source_given
+        && !common.codex_roots_given
+    {
         common.source = SourceSel::Claude;
     }
     if !common.codex_roots_given {
@@ -439,6 +483,56 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 repo,
                 // The assistant writes a great deal: what was asked is the thread.
                 who: who.unwrap_or(WhoFilter::User),
+            })
+        }
+        "memory" => {
+            let [pattern] = rest else {
+                return Err(format!(
+                    "memory takes one REGEX (put `--` before one that starts with `-`)\n{USAGE}"
+                ));
+            };
+            let re = RegexBuilder::new(pattern)
+                .case_insensitive(ignore_case)
+                .build()
+                .map_err(|e| format!("memory: not a regex: {e}"))?;
+            let scope = Scope {
+                root: common.root.clone(),
+                codex_memories: codex_memories
+                    .unwrap_or_else(|| PathBuf::from(format!("{home}/.codex/memories"))),
+                source: common.source,
+                projects: common.projects.clone(),
+                excludes: common.excludes.clone(),
+                mtype,
+                index,
+                folders: None,
+            };
+            Cmd::Memory(scope, MemoryOpts { re })
+        }
+        "rules" => {
+            if !rest.is_empty() {
+                return Err(format!(
+                    "rules takes no arguments, got `{}`\n{USAGE}",
+                    rest.join(" ")
+                ));
+            }
+            let pattern = regex("--pattern", pattern.as_deref().unwrap_or(DEFAULT_PATTERN))?;
+            let scope = Scope {
+                root: common.root.clone(),
+                codex_memories: codex_memories
+                    .unwrap_or_else(|| PathBuf::from(format!("{home}/.codex/memories"))),
+                source: common.source,
+                projects: common.projects.clone(),
+                excludes: common.excludes.clone(),
+                mtype: None,
+                index: false,
+                folders: None,
+            };
+            Cmd::Rules(RulesOpts {
+                pattern,
+                repo,
+                count,
+                scope,
+                home: home.clone(),
             })
         }
         other => return Err(format!("unknown command `{other}`\n{USAGE}")),
