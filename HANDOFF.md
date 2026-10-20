@@ -4,6 +4,14 @@
 
 測った結果や試用の記録は、このリポジトリではなく `~/project/prod/harness-engineering/` に置く（道具をまたぐものは `changes.md` と `reports/`、agentlog だけのものは `notes/agentlog/`）。
 
+## memory と rules：メモリを引く、禁止ルールを棚卸しする（2026-10-20、ブランチ `memory-rules`。main への取り込みと `cargo install` はまだ）
+
+`agentlog memory REGEX`（メモリのファイルから探す。必要なときに引く）と `agentlog rules [--repo DIR]`（禁止ルールの本数を数えて並べる）。禁止が複数あると互いにぶつかって振る舞いがおかしくなることがあるため、本数を知り、`--json` をモデルに渡して読ませる。ぶつかりの判定は意味の判断なので機械ではしない。仕様は `docs/design.md` の「memory と rules」、使い方は `docs/recipes.md` の 6、`src/help.txt`。
+
+- **作り.** `memory.rs`（メモリの発見・frontmatter・コードブロックの区別・実体のパスでの重複除き・プロジェクト名）と `rules.rs`（禁止の式 `DEFAULT_PATTERN` と一覧）。ログは読まず、控えも使わない。`build.rs` の読み方のハッシュには数えない。
+- **確かめ.** 結合テスト 10 件（`tests/memory.rs`。一時フォルダに架空のメモリ：リンクの重複、frontmatter、コードブロック、索引、Codex）と単体 5 件。わざと壊して落ちた：実体での重複除きをやめる（5 件）、禁止にコードを数える（2 件）、索引を除かない（4 件）。
+- **残した課題.** 判定は行単位の loose な式で、偽陽性が多い。`--repo` は渡した場所のプロジェクトのフォルダだけを見る（作業ツリーや親のフォルダのメモリは入らない）。
+
 ## 控え（キャッシュ）：search・show・timeline をログが増えても速く（2026-10-17、ブランチ `speed`。main への取り込みと `cargo install` はまだ）
 
 `search`・`show`・`timeline` が、ログのファイルごとに読み取った結果を `~/.cache/agentlog/`（`$XDG_CACHE_HOME`）に置き、追記された分だけを読み足す。`--raw` は控えを使わずログを直接読む。仕様は `docs/design.md` の「控え」、確かめ方は `docs/recipes.md` の 4「控えが怪しいとき」、`src/help.txt` の `Cache` の節。方針は `harness-engineering/backlog.md`（DB・全文索引は持たない。控えは作り直せる写し）。

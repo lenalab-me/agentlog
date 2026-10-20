@@ -1,6 +1,6 @@
 # agentlog
 
-Claude Code のセッションログ（`~/.claude/projects/`）と Codex のセッションログ（`~/.codex/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`。Claude Code と Codex の両方）と、あるリポジトリの「利用者の発言」と「コミット」を時刻順に1本に並べること（`timeline`）もできる。数える `repeats`・`tool`・`daily` は Claude Code だけ。
+Claude Code のセッションログ（`~/.claude/projects/`）と Codex のセッションログ（`~/.codex/`）から、エージェントが同じ失敗をくり返しているところと、作った道具が使われているかを数える Rust 製 CLI。rpatch や devsrv のような道具を作る前に何を作るか決めるとき、作ったあとに効いているかを確かめるときに使う。振り返りのために、過去の会話を探して読むこと（`search`・`show`。Claude Code と Codex の両方）と、あるリポジトリの「利用者の発言」と「コミット」を時刻順に1本に並べること（`timeline`）もできる。数える `repeats`・`tool`・`daily` は Claude Code だけ。ログではなくメモリのファイルを引く `memory` と、禁止ルールの本数を数えて並べる `rules` もある。
 
 ```sh
 cargo install --locked --path .
@@ -12,6 +12,8 @@ agentlog search 'too loose' -i --who user           # 前に何と言ったか�
 agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時刻で、その前後の会話を読む
 agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は search が claude、show が all）
 agentlog timeline --repo ~/project/prod/x --since 2026-10-01 --until 2026-10-03   # 発言とコミットを時刻順に（振り返り・引き継ぎ）
+agentlog memory '関所' --type feedback              # メモリのファイルから探す（必要なときに引く。毎回読むものではない）
+agentlog rules --repo . --count                     # この場所で始めたセッションが読む禁止ルールの本数（--json をモデルに渡して、ぶつかりを読ませる）
 # 別の場所に写したログは、--root（Claude）と --codex-root（Codex。sessions と archived_sessions の2か所）で渡す
 agentlog search 'Planconfig' --raw                  # 控え（~/.cache/agentlog）を使わず、ログを直接読む（遅いが確実。控えが怪しいときの突き合わせ）
 ```
@@ -21,7 +23,7 @@ agentlog search 'Planconfig' --raw                  # 控え（~/.cache/agentlog
 `search`・`show`・`timeline` は、ログから読み取った会話の本文を `~/.cache/agentlog/`（`$XDG_CACHE_HOME`）に控えとして置く。ログが増えても、2 回目からは増えた分だけを読むので、全ログ（Claude 1.3 GB、Codex の写し 26 GB）でも 0.1 秒前後。控えは元のログから作り直せる写しで、消しても次の 1 回が遅くなるだけ。`--raw` で控えを使わずにログを直接読める（遅いが確実）。仕組みは `docs/design.md` の「控え」、怪しいときの確かめ方は `docs/recipes.md` の 4。
 
 - [設計](docs/design.md): 文脈と呼び出し、失敗、シグネチャ、`repeats` と `tool` の数え方、プリセット、`search`・`show`・`timeline` の控え（キャッシュ）、未決と危険
-- [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る、振り返りで会話を探す、会話とコミットを並べて引き継ぎを書く
+- [使いどころ](docs/recipes.md): 次に作るものを探す、作った道具が効いているか確かめる、新しい道具を測る、振り返りで会話を探す、会話とコミットを並べて引き継ぎを書く、メモリを引く・禁止ルールを棚卸しする
 - [引き継ぎ](HANDOFF.md): 今どこまでできたか、10 月の結論、次にやること
 
 ## 数え方の決まり

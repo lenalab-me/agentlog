@@ -8,6 +8,8 @@ Usage:
   agentlog search REGEX [-i] [--who user|assistant|any] [--limit 50] [--source S]
   agentlog show SESSION [--grep RE | --at TIME] [--around 5] [--full] [-i] [--source S]
   agentlog timeline --repo DIR [--who user|any] [--source S]
+  agentlog memory REGEX [-i] [--type T] [--index] [--source S] [--codex-memories DIR]
+  agentlog rules [--repo DIR] [--pattern RE] [--count] [--source S] [--codex-memories DIR]
 Every command takes:
   --since WHEN  --until WHEN  --project S  --exclude S  --json
   --root DIR (Claude Code's logs, default ~/.claude/projects)
@@ -30,13 +32,16 @@ Examples:
   agentlog search 'Planconfig' --source codex       only Codex's logs
   agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
   agentlog timeline --repo ~/project/prod/x --since 2026-10-01   what was said and committed
+  agentlog memory '関所' --type feedback            look something up in the memory files
+  agentlog rules --repo . --count                   how many prohibitions a session here reads
+  agentlog rules --repo . --json                    give this to a model: do any of them collide?
   agentlog search 'Planconfig' --raw                the same without the cache (to check it)
 
 Output: text tables; --json prints one JSON object instead (search, timeline: one object per
 hit, one per line). Commands appear only with -v/--examples, since they can hold credentials;
 show prints each tool call as a one-line note and never the result.
 Exit status: 0 ok (also with 0 hits); 2 invalid input, SESSION not found or not unique, or
---repo not a git repository; 3 the log directory cannot be read.
+--repo not a git repository (for rules: not a directory); 3 the log or memory directory cannot be read.
 
 search: one line per utterance that matches (the first match in it): local time, who
   (user, assistant, or task = a prompt the parent gave a subagent), source (claude or
@@ -61,6 +66,31 @@ timeline: what was said and what was committed in one list, oldest first, so a r
   worktree git lists, or ~/.t3/worktrees/<repo name>/ (T3 Code's, deleted ones too); lines in
   a folder above the repository (where a session was opened) count for neither side. The
   judgement uses only the lines in the window. --project S picks sessions by name instead.
+
+memory: search the memory files, not the session logs: Claude Code's are
+  ~/.claude/projects/<folder>/memory/*.md (name, description and type in a frontmatter), Codex's
+  are the .md files under ~/.codex/memories/ (any form; they have no type). REGEX is looked for
+  in the text, the name and the description (not in the rest of the frontmatter). -i ignores case.
+  --type T (user|feedback|project|reference) keeps those; Codex's have no type, so they go.
+  --source claude|codex|all (default claude), --project S / --exclude S (the project, its folder,
+  or the file's path), --root DIR, --codex-memories DIR (default ~/.codex/memories).
+  MEMORY.md, the index of the others, is left out unless --index. A file that several project
+  folders show through a link is one hit, under the folder it really lives in (--json: also_in
+  lists the others). Output: per file the project, file, type and description, then the matching
+  lines as `NUMBER: text`; the count last. --json: one object per file. No window and no cache:
+  --since, --until and --raw do not apply.
+rules: count the prohibitions in the memory files and list them, so that they can be read side
+  by side. Whether two collide is for a person or a model to judge; nothing here guesses it.
+  Default: Claude Code's memories (MEMORY.md left out, a linked file once). --repo DIR: what a
+  session started in DIR reads: ~/.claude/CLAUDE.md, DIR/AGENTS.md and DIR/CLAUDE.md (a link
+  to the same file counts once) and the memories of DIR's project. --source codex|all adds
+  ~/.codex/AGENTS.md and Codex's memories. A prohibition is a line of text (not a heading, the
+  frontmatter or a fenced code block) that matches --pattern RE; the default is loose
+  (しない しません 使わない 書かない 入れない 渡さない 提案しない 禁止 やめる 避ける, a sentence
+  ending in ない, never, don't, do not, must not, avoid), so some lines only mention one.
+  Output: lines per file, most first, and the total; then every line as `file:NUMBER  text`.
+  --count stops after the total. --json: one object per line (with --count, one per file and a
+  last one with the totals).
 
 Codex logs (search, show and timeline; repeats, tool and daily read Claude Code's logs only):
   A Codex id is the LAST 8 characters of the session: ids start with a time, so sessions

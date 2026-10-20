@@ -128,7 +128,7 @@ devsrv
 
 | ファイル | 役目 |
 |---|---|
-| `main.rs` | 引数を読み、ログを読み、6 つ（`repeats`・`tool`・`daily`・`search`・`show`・`timeline`）のうち 1 つを呼んで出す。`search`・`show`・`timeline` は Claude と Codex の両方を読んで 1 つの一覧にする |
+| `main.rs` | 引数を読み、ログを読み、8 つ（`repeats`・`tool`・`daily`・`search`・`show`・`timeline`・`memory`・`rules`）のうち 1 つを呼んで出す。`search`・`show`・`timeline` は Claude と Codex の両方を読んで 1 つの一覧にする |
 | `cli.rs` | 引数。オプションはサブコマンドの後のどこに置いてもよい。実行中のセッションを外す |
 | `load.rs` | ファイルを集め（`all_files`・`select_from`・`select_files`）、スレッドで並べて読み（`read_all`）、呼び出しにする |
 | `sig.rs` | プログラム、エラー行、ならし、シグネチャ、ユーザーが断ったか |
@@ -141,6 +141,8 @@ devsrv
 | `needle.rs` | `search` の正規表現から「一致する行に必ず入る文字列」を取り出し、生の行で先に当たりを見る（JSON に読む前の絞り込み） |
 | `recall.rs` | `search` と `show` の出力 |
 | `timeline.rs` | `timeline`：`git log` と `git worktree list` を呼び、セッションがリポジトリのものかを `cwd` で決め、発言とコミットを時刻順に並べて出す |
+| `memory.rs` | `memory`：メモリのファイル（Claude Code の `~/.claude/projects/<フォルダ>/memory/`、Codex の `~/.codex/memories/`）を探して読み（frontmatter・コードブロックの区別、実体のパスでの重複除き、プロジェクト名）、正規表現で探して出す。`rules` も同じ読み方を使う |
+| `rules.rs` | `rules`：メモリと指示ファイルから禁止の行を拾い、ファイルごとの本数と行の一覧を出す。禁止の判定の正規表現（`DEFAULT_PATTERN`）はここに 1 か所 |
 | `time.rs` | ISO 8601 の読み書き、地方時の日付、`14d` のような相対の指定 |
 
 依存は `serde_json`、`regex-lite`、`libc`（地方時の差）、`memchr`（行の分割と文字列探し。`serde_json` がすでに使っている）だけ。10 月の半月分（約 1.3 GB、684 文脈、2.9 万回の呼び出し）を 1 秒前後で読む。行に `"tool_use` も `"tool_result` も含まれなければ JSON として読まずに飛ばすのが効いている。
@@ -283,6 +285,28 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 **速さ.** 窓の中の `user`・`assistant` の行だけを JSON に読む（`search` と同じ）。`cwd` の数え上げは、すでに読んだ行の `cwd` を見るだけで、読む行を増やさない。`git log` は 15 ms ほど。全ログ（Claude 1.3 GB、10 月分）で、既定の窓も `--since 2026-01-01` も `search` とほぼ同じ 0.5 秒ほど（`hyperfine -N`）。控えを入れたあとの数字は、下の「控え」の表。
 
 **なぜ DB を持たないか／公式が来たら.** `search` と同じ。公式にセッションの要約・引き継ぎが来たら、`timeline.rs`・`main.rs` の `timeline` 関数・`cli.rs` の `timeline` の分岐を消せば終わる（`Session.cwds` は残っても害はない）。
+
+### memory と rules
+
+2026-10-20 に足した。ここまでの命令はセッションのログを読むが、この 2 つはエージェントが残したメモリのファイルを読む。控え（キャッシュ）は使わない（ファイルは小さく、数百件）。`build.rs` の「読み方」には数えない（`memory.rs`・`rules.rs` は `NOT_READERS`）。
+
+**メモリの置き場.** Claude Code：`~/.claude/projects/<符号化したパス>/memory/*.md`。先頭の frontmatter に `name`・`description`・`metadata.type`（`user`・`feedback`・`project`・`reference`。古いファイルは `type` が直下）。`MEMORY.md` はほかのファイルの索引。Codex：`~/.codex/memories/` の下の `.md`（`raw_memories*.md`・`rollout_summaries/` も。形は自由で type はない）。
+
+**`memory REGEX`.** 本文・`name`・`description` から探す（frontmatter のほかの行、`originSessionId` や `modified` は探さない）。コードブロックの中は探す。出力は 1 ファイルごとに、プロジェクト・ファイル名・type・description、続けて当たった行を `行番号: 本文`（前後なし）、最後に行数とファイル数。`--json` は 1 ファイル 1 オブジェクト。
+
+- **索引は既定で外す.** `MEMORY.md` は他のファイルの題を並べたもので、探すと同じ語が二重に当たる。`--index` で含める。
+- **同じファイルは 1 件.** `-Users-…-network-designer/memory` が `-Users-…-network/memory` へのシンボリックリンクのように、1 つのメモリが複数のプロジェクトのフォルダから見える。実体のパス（`canonicalize`）で束ね、実体のあるフォルダのプロジェクトで出す。ほかのフォルダの名前は `--json` の `also_in` に残し、`--project`・`--exclude` はそれらの名前でも当たる（`--project network-designer` で、リンク先にある共有のメモリも見つかる）。
+- **プロジェクト名.** フォルダ名は符号化されていて読みにくい（`-Users-me-project-prod-x`）ので、`search` と同じ読み方（`talk::project_name`）で、そのフォルダのセッションのログの最初の方にある `cwd` から出す。`cwd` を符号化し直したものがフォルダ名と一致するときだけ採用し、引けなければフォルダ名のまま。Codex は `codex`。
+- **窓はない.** `--since`・`--until` は効かず、`--raw`・`--codex-root` はエラー。Codex のメモリの場所は `--codex-memories DIR`。
+
+**`rules`.** 禁止ルールが複数あると互いにぶつかって、エージェントの振る舞いがおかしくなることがある。何本あるかを数え、人かモデルが見比べられるように並べるための棚卸し。**ぶつかりの判定は意味の判断なので、機械ではしない**（キーワードの組み合わせで衝突を推測する仕組みは作らない）。使い方は、`agentlog rules --repo . --json` をモデルに渡して、互いにぶつかる禁止がないか読ませる。
+
+- **対象.** 既定は Claude のメモリ（索引を除く、重複は `memory` と同じ）。`--repo DIR` でそのディレクトリで始めたセッションが読むものに絞る：`~/.claude/CLAUDE.md`、`DIR/AGENTS.md`・`DIR/CLAUDE.md`（片方がもう一方へのリンクなら 1 つ）、`DIR` に対応するプロジェクトのフォルダ（`DIR` の実体のパスを符号化したもの）のメモリ。`--source codex|all` は `~/.codex/AGENTS.md` と Codex のメモリを足す（`--repo` を付けても Codex のメモリは全部。Codex に作業場所ごとの区別はない）。
+- **禁止の行.** 本文の行（見出し・frontmatter・コードブロックの中・空行を除く）のうち `DEFAULT_PATTERN`（`rules.rs`）に当たるもの。日本語の「しない／しません／使わない／書かない／入れない／渡さない／提案しない／禁止／やめる／避ける／ならない」、文末の「ない」、英語の never・don't・do not・must not・avoid。**偽陽性は許す**（「禁止を挙げた説明」も数える。棚卸しの材料だから）。行ごとに見るので、2 行にわたる箇条書きの項目は行ごとに数える。`--pattern RE` で全部を差し替える（大文字小文字を区別しない `(?i)` は既定の式に入っている）。
+- **出力.** ファイルごとの本数の表（多い順）、合計（当たりのあったファイル数・読んだファイル数）、空行のあと `ファイル:行番号  本文`。`--count` は合計まで。`--json` は 1 行 1 件（`--count` なら 1 ファイル 1 件と、最後に合計）。
+- **終了コード.** `--repo` がディレクトリでなければ 2、`--pattern` が正規表現でなければ 2、メモリのフォルダが読めなければ 3。
+
+**限り.** 判定は行単位で、前後の文脈は見ない（「〜しないほうがよい」「〜しないでよい」も当たる）。Claude のプロジェクトのフォルダは作業ツリーごとに別なので、`--repo` は渡した場所のフォルダだけを見て、作業ツリーや親のフォルダで開いたセッションのメモリは入らない。`DIR/.claude/` の下の指示や、`@` で取り込まれるファイルは読まない。
 
 ### 控え（`~/.cache/agentlog/`）
 
