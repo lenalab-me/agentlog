@@ -1,5 +1,5 @@
 //! A cheap test on a raw log line, run before the line is read as JSON: does the line hold
-//! a string that every match of the search pattern must contain? Codex logs are 26 GB,
+//! a string that every match of the search pattern must contain? Codex logs are big,
 //! mostly tool output, so the lines that cannot match are never parsed.
 //!
 //! The test may let a line through that does not match (the regex decides later). It must

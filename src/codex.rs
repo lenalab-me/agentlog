@@ -2,7 +2,7 @@
 //! `~/.codex/archived_sessions/`), read as the same `Session`s `talk.rs` makes from Claude
 //! Code's logs, for `search` and `show`.
 //!
-//! The logs are big (26 GB over 1,800 files, nearly all tool output), so a file is not read
+//! The logs are big (nearly all tool output), so a file is not read
 //! as JSON line by line. A line's first bytes say what it is (`"payload":{"type":"message"`);
 //! only messages (and, for `show`, tool calls) are parsed, and for `search` only the messages
 //! that pass `Prefilter`, the pattern's own literal looked for in the raw line.

@@ -28,17 +28,17 @@ agentlog repeats --since 14d --tool Bash --examples 5
 agentlog daily wt='isolated in the worktree' edit_hook='Blocked by a hook' rate='Too many requests' --since 2026-10-01
 ```
 
-## 2. 作った道具が効いているか確かめる
+## 2. 作った道具が使われているか確かめる
 
 CLAUDE.md に案内を足した時刻か、最初に使った時刻から後を見る。それより前の手作業は、逃げではない。
 
 ```sh
 agentlog tool devsrv --since 2026-10-01          # 前と後を並べたいので、窓は入れる前から
-agentlog tool rpatch --since 2026-10-06T23:57Z -v
+agentlog tool rpatch --since 2026-10-01T00:00Z -v
 ```
 
-- **`first use in the window`** と **`other ways per day: X before … Y after`.** 前より後が大きく減っていれば、置き換わっている。前が 1 日に満たないと、この行は出ない（窓を前に広げる）。
-- **`after a failure`.** `fixed on the next call` が大半なら、失敗の案内が効いている。数えるべきは `fixed after N failures in a row`（同じ道具で続けて失敗）と `went another way`（別の手段に逃げた）。
+- **`first use in the window`** と **`other ways per day: X before … Y after`.** 前より後が減っていれば、置き換わっている。前が 1 日に満たないと、この行は出ない（窓を前に広げる）。
+- **`after a failure`.** `fixed on the next call` が大半なら、失敗してもすぐ直せている。数えるべきは `fixed after N failures in a row`（同じ道具で続けて失敗）と `went another way`（別の手段に逃げた）。
 - **`went to`.** どこへ逃げたか。`-v` で、失敗の行と逃げた先のコマンドを見る。新しいスクリプトを `/tmp` 以外に書いただけのもの（逃げではない）が混じる。
 - **`other ways` の内訳.** 道具ができた後にも残っている別のやり方。多いものが、案内か hook で塞ぐ候補。
 
@@ -51,7 +51,7 @@ agentlog tool rpatch --since 2026-10-06T23:57Z -v
 ```sh
 # Bash から呼ぶ CLI
 agentlog tool waitfor --uses '(^|[\s;&|(])waitfor\s' --fail '(?m)^waitfor: ' \
-  --alt '(^|[\s;&(])until\s[^\n]*sleep|(^|[\s;&(])sleep\s+\d' --since 2026-10-20
+  --alt '(^|[\s;&(])until\s[^\n]*sleep|(^|[\s;&(])sleep\s+\d' --since 2026-10-01
 
 # MCP のツールや組み込みのツールは、名前だけで
 agentlog tool mcp__aws-knowledge__aws___search_documentation --since 2026-10-01
@@ -98,7 +98,7 @@ agentlog show 1a2b3c4d --grep '切り分けすぎ' --around 5        # 時刻の
 `show` は、既定で Claude Code と Codex の両方を読む（一覧の `claude` / `codex` の列で見分ける）。`search` と `timeline` は、頼んだときだけ Codex も読む（`--source codex|all` か `--codex-root` を付ける。付けないと Claude のログだけ）。片方だけなら `--source claude` / `--source codex`。使い方は同じだが、次の点がちがう。
 
 ```sh
-agentlog search 'デプロイ|deploy' -i --source codex --since 2026-09-01   # Codex のログだけ
+agentlog search 'デプロイ|deploy' -i --source codex --since 2026-10-01   # Codex のログだけ
 agentlog show 3c4d5e6f --grep 'デプロイ'                                  # Codex の id は末尾 8 文字
 # 別の場所に写してあるログ（sessions と archived_sessions の2か所を渡す。Claude 側は --root）
 agentlog search 'デプロイ' --source codex \
@@ -109,7 +109,7 @@ agentlog search 'デプロイ' --source codex \
 - **id は末尾 8 文字.** Codex の id は先頭が時刻なので、同じ時期のセッションは先頭が同じ。`show` は id の**どの部分でも**受け付ける。複数に当たれば候補（`id  source  時刻  プロジェクト`）が出る。
 - **別の場所に写したログは、両方の置き場所を渡す.** 片方だけだと、アーカイブ済みのセッションか、まだアーカイブされていないセッションが抜ける。本物と写しの両方を渡しても、同じ id のセッションは 1 つだけ読む（大きいほう）。
 - **`--project` は作業ディレクトリ名.** Codex にはフォルダ名がなく、セッションの `cwd` から作った名前（`shop/web` など。ホームと先頭の `project/prod/` を落とした形）に含まれるかで選ぶ。
-- **全期間でも、2 回目からは速い.** 最初の `search` は控えを作るので、ログの量に応じて時間がかかる（`--raw`、つまり控えなしだと毎回その分かかる）。2 回目からは控えだけを読むので速い。測った数字は `docs/design.md` の「速さ」（2026-10-17 の測定）。控えの仕組みと確かめ方は下の「控えが怪しいとき」。
+- **全期間でも、2 回目からは速い.** 最初の `search` は控えを作るので、ログの量に応じて時間がかかる（`--raw`、つまり控えなしだと毎回その分かかる）。2 回目からは控えだけを読むので速い。控えの仕組みと確かめ方は下の「控えが怪しいとき」。
 - **Codex の `user` は、アプリが足した文を除いてある.** 添付の一覧、ブラウザの状態、AGENTS.md、サブエージェントの通知など。見分け方は `docs/design.md` の「Codex のログ」。サブエージェントのセッションの依頼は `task`。
 
 ### 控えが怪しいとき
@@ -131,7 +131,7 @@ rm -rf ~/.cache/agentlog
 ```
 
 - `--raw` は控えを読まず、書かない。`show`・`timeline` にも付く（`diff` の相手に使う）。
-- 控えのフォルダは、消しても安全（元のログから作り直せる写し。作り直しにかかる時間はログの量で変わる。2026-10-17 の測定では、Claude 1.3 GB で 1 秒ほど、Codex 26 GB で 6〜8 秒）。ログのほうは消さない。
+- 控えのフォルダは、消しても安全（元のログから作り直せる写し。作り直しにかかる時間はログの量で変わる）。ログのほうは消さない。
 - ログを書き換えた・別の場所に置き直したときは、控えは使われずに作り直される（見分けが変わるため）。同じ場所で中身だけ書き換えて、大きさも更新時刻も変えなかったときだけは、控えを信じてしまう。
 - 実行中のセッションのログは、今この瞬間に書いている最後の行を、次の実行まで待つ（改行まで書き終わっていない行は読まない。`--raw` でも同じ）。
 

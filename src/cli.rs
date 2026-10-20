@@ -342,9 +342,8 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--repo is for timeline and rules; {sub} does not take it"
         ));
     }
-    // Codex's logs are 20 times Claude's (5 s against 0.4 s to read them all) and no longer
-    // grow, so search (and timeline) read them when asked. show finds a Codex id by its file
-    // name, cheaply.
+    // Codex's logs are much bigger than Claude's, so search (and timeline) read them when
+    // asked. show finds a Codex id by its file name, cheaply.
     if (sub == "search" || sub == "timeline" || on_memories)
         && !source_given
         && !common.codex_roots_given

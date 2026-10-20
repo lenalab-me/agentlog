@@ -1,12 +1,12 @@
 # agentlog の設計
 
-2026-10-15。10 月のセッションログから次に作る道具を探したとき、使い捨ての Python で数え方を 3 回取り違えた（README の「経緯」）。その直した数え方を、道具を問わず使える 1 つのバイナリに固めたもの。2026-10-17 に、振り返りでログを「探す」「読む」ための `search` と `show` を足した（下の「search と show」）。同じ日に、会話とコミットを時刻で並べる `timeline` も足した（下の「timeline」）。
+セッションログから次に作る道具を探すとき、数え方を取り違えやすい（下の「問題」）。その防ぎ方を、道具を問わず使える 1 つのバイナリに固めたもの。振り返りでログを「探す」「読む」ための `search` と `show`（下の「search と show」）と、会話とコミットを時刻で並べる `timeline`（下の「timeline」）も持つ。
 
 ## 問題
 
-エージェントの手間を減らす道具（rpatch、devsrv）を作るか決めるときと、作ったあとに効いているかを見るとき、根拠はセッションのログしかない。数えるのは易しいが、何を数えるかで結論が逆になる。取り違えたのは次の 3 つ。
+エージェントの手間を減らす道具（rpatch、devsrv）を作るか決めるときと、作ったあとに使われているかを見るとき、根拠はセッションのログしかない。数えるのは易しいが、何を数えるかで結論が逆になる。取り違えやすいのは次の 3 つ。
 
-- **どの呼び出しを窓に入れるか。** ファイルの更新時刻で選ぶと、4 月のセッションを 10 月に再開しただけで、4 月の kubectl 360 回が 10 月に入った。
+- **どの呼び出しを窓に入れるか。** ファイルの更新時刻で選ぶと、昔のセッションを再開しただけで、昔の呼び出しが窓に入る。
 - **何を失敗とみなすか。** rpatch は、失敗したら次の 1 回で直せるように作ってある。1 回の失敗を数えると、設計どおりに動いている道具が一番の問題に見える。
 - **いつから比べるか。** devsrv ができる前の `lsof`・`pkill` は、devsrv からの逃げではない。
 
@@ -14,31 +14,36 @@
 
 ```
 $ agentlog repeats --since 2026-10-01 --top 3
-2026-10-01 00:00 .. 2026-10-15 20:47 (local): 28668 calls, 1293 failed, in 684 contexts (a subagent is its own context)
+2026-10-01 00:00 .. 2026-10-08 12:00 (local): 1200 calls, 90 failed, in 40 contexts (a subagent is its own context)
 The same failure again. rep: contexts that had it twice or more. ctx: contexts that had it.
 streak: longest run of it on one tool with no passing call of that tool between.
 
  rep  ctx total streak days  last         signature
-  23   31    87      3    3  10-14 04:27  Bash | This agent is isolated in the worktree <path>, but this command is too complex …
-  12   40    62      1   13  10-15 19:46  Bash rpatch | error: edits[N] <path> (input line N): "old" not found
-  12   15    47      6    1  10-02 20:58  mcp__aws-knowledge__aws___search_documentation | Error POSTing to endpoint: … Too many requests …
+   4    9    20      3    3  10-07 04:27  Bash | This agent is isolated in the worktree <path>, but this command is too complex …
+   3    6    11      1    5  10-07 19:46  Bash rpatch | error: edits[N] <path> (input line N): "old" not found
+   2    3     7      4    1  10-02 20:58  mcp__example__search | Error POSTing to endpoint: … Too many requests …
 
 $ agentlog tool devsrv --since 2026-10-01
 …
 devsrv
-  first use in the window: 2026-10-07 02:21
-  uses: 270, failed: 17 (6.3%)
-  other ways per day: 17.1 before the first use (6.1 days), 3.1 after (8.8 days)
-  other ways: Bash pkill 42, Bash kill 28, Bash lsof 28, Bash nohup 24, Bash http.server 6, …
+  first use in the window: 2026-10-03 02:21
+  uses: 100, failed: 5 (5.0%)
+  other ways per day: 10.0 before the first use (2.0 days), 2.0 after (5.0 days)
+  other ways: Bash pkill 12, Bash kill 8, Bash lsof 8, Bash nohup 6, …
 
-  after a failure (16 runs of failures; other calls between are skipped)
-        9  fixed on the next call
-        7  context ended after it
+  after a failure (5 runs of failures; other calls between are skipped)
+        3  fixed on the next call
+        2  context ended after it
 
   day          uses  failed  other
-  2026-10-06      0       0     24
-  2026-10-07     12       0     19  <- first use
+  2026-10-02      0       0     10
+  2026-10-03     12       0      9  <- first use
   …
+```
+
+（上は形を示す作った例。本物の数ではない。）
+
+読み方は
 ```
 
 読み方は `docs/recipes.md`。
@@ -72,7 +77,7 @@ devsrv
 2. **何と言われたか.** 動いた Bash は、`Exit code` の行より後で、誤りらしい語（error、not found、denied、timed out、blocked …）を含む最初の行。なければ出力の最初の行。断られたものと Bash 以外は、結果の最初の行。
 3. **ならす.** パス（`/` を含む語）を `<path>`、7 桁以上の 16 進を `<id>`、数字を `N` に。空白を詰めて 110 文字で切る。
 
-「なければ最初の行」にしたのは、`rpatch: line 19: a FROM part needs …` のように誤りらしい語を含まない短い誤りを、まとめるため。毎回ちがう出力（`grep` の結果、表）は、1 回きりのシグネチャになって一覧から落ちる。前は `Exit code N` 1 つにまとめていたが、それが一覧の上位に来て意味を持たなかった。
+「なければ最初の行」にしたのは、`rpatch: line 19: a FROM part needs …` のように誤りらしい語を含まない短い誤りを、まとめるため。毎回ちがう出力（`grep` の結果、表）は、1 回きりのシグネチャになって一覧から落ちる。`Exit code N` 1 つにまとめると、それが一覧の上位に来て意味を持たない。
 
 ### repeats
 
@@ -122,7 +127,7 @@ devsrv
 
 ### 出力と終了コード
 
-既定は表。`--json` で同じ内容を 1 つの JSON にする。**コマンドの本文は `-v` / `--examples N` のときだけ出す。** ログには認証情報が入りうる（devsrv の `baseline.py` も件数だけを出していた）。シグネチャは、ならしたエラー行なので既定で出す。
+既定は表。`--json` で同じ内容を 1 つの JSON にする。**コマンドの本文は `-v` / `--examples N` のときだけ出す。** ログには認証情報が入りうる。シグネチャは、ならしたエラー行なので既定で出す。
 
 終了コードは 0 成功、2 入力の誤り（日時、正規表現、知らない引数）、3 ログのディレクトリが読めない。数えた結果が 0 件でも 0。
 
@@ -148,7 +153,7 @@ devsrv
 | `rules.rs` | `rules`：メモリと指示ファイルから禁止の行を拾い、ファイルごとの本数と行の一覧を出す。禁止の判定の正規表現（`DEFAULT_PATTERN`）はここに 1 か所 |
 | `time.rs` | ISO 8601 の読み書き、地方時の日付、`14d` のような相対の指定 |
 
-依存は `serde_json`、`regex-lite`、`libc`（地方時の差）、`memchr`（行の分割と文字列探し。`serde_json` がすでに使っている）だけ。2026-10-15 の測定で、10 月の半月分（約 1.3 GB、684 文脈、2.9 万回の呼び出し）を 1 秒前後で読めた。行に `"tool_use` も `"tool_result` も含まれなければ JSON として読まずに飛ばすのが効いている。
+依存は `serde_json`、`regex-lite`、`libc`（地方時の差）、`memchr`（行の分割と文字列探し。`serde_json` がすでに使っている）だけ。行に `"tool_use` も `"tool_result` も含まれなければ JSON として読まずに飛ばす。
 
 ### search と show
 
@@ -169,7 +174,7 @@ devsrv
 | assistant の `model` が `<synthetic>` | 外す（APIの代わりにハーネスが返した定型文） |
 | `queue-operation`、`attachment`、`system` など、`user`・`assistant` 以外の行 | 見ない |
 
-実際のログ（10 月分）で見た形：人が打った文は `promptSource` が `typed`（Claude Code の端末）か `sdk`（T3 Code などの SDK 経由）で、**印だけでは T3 が送る依頼文と区別できない**（どちらも `sdk`）。そのため、T3 Code の定型の書き出しの一覧（表の該当の行）は、ログを見て足していく経験則。新しい定型が混ざったら `sent_for_a_task` に足す。`--who user` が `task` を含まないのはこのため（`--who any` には含まれる）。
+ログの形：人が打った文は `promptSource` が `typed`（Claude Code の端末）か `sdk`（T3 Code などの SDK 経由）で、**印だけでは T3 が送る依頼文と区別できない**（どちらも `sdk`）。そのため、T3 Code の定型の書き出しの一覧（表の該当の行）は、ログを見て足していく経験則。新しい定型が混ざったら `sent_for_a_task` に足す。`--who user` が `task` を含まないのはこのため（`--who any` には含まれる）。
 
 **セッションの id.** 先頭 8 文字。サブエージェントは `親の8文字/エージェントの8文字`（`show` にそのまま渡せる）。親のセッションは、ファイルが `<session>.jsonl` ならその名前、サブエージェントは `<session>/subagents/agent-X.jsonl` の `<session>`、古い形で同じディレクトリに `agent-X.jsonl` があるときは、行の中の `sessionId`。
 
@@ -179,13 +184,13 @@ devsrv
 
 **show.** `SESSION` は id の先頭（`search` が出した 8 文字、サブエージェントは `親/子`）。複数に当たれば、候補を出して終了コード 2。実行中のセッションを自動で外す動きは `show` では行わない（名前を指定しているので）。本文は順に、ツールの呼び出しは `[Bash] コマンドの先頭行…` の 1 行（結果は出さない）。`--grep RE`（最初に一致した発言）か `--at 時刻`（もっとも近い発言。分までなら、その分の中の最初の発言）を中心に、前後 `--around N`（既定 5）発言を出す。中心の発言には `>>` を付け、各発言に `#番号` を付ける。どちらもなければ全部。1 発言は 2000 文字で切る（`--full` で全部）。
 
-**なぜ DB を持たないか.** 最初は、全ログ（1.3 GB）を読んで検索するのに、リリースビルドで 0.4〜0.5 秒、メモリは 50 MB 弱（`rg` で直に探すと 0.06 秒）で、速さは足りていた。その後ログが増え（2026-10-17 の測定で、Claude は 1 週間で 715 MB 分のファイルが更新され、Codex の写しは 26 GB）、毎回全部を読む作りでは量に比例して遅くなるため、読み取った結果の控えを足した（下の「控え」）。DB や索引は持たない。更新の遅れ、置き場所、作り直しの手順が増え、ログの形が変わったときに壊れる場所も増えるため。公式にセッション検索が来たら、`talk.rs`・`codex.rs`・`needle.rs`・`recall.rs`・`cache.rs`・`lines.rs`・`build.rs`・`cli.rs` の `search`/`show` の分岐・`main.rs` の `search`/`show` 関数を消せば終わる形にしてある（`load.rs` の `select_files` / `read_all` は残って `repeats` などが使う）。
+**なぜ DB を持たないか.** 毎回全部を読む作りでは、ログの量に比例して遅くなるため、読み取った結果の控えを持つ（下の「控え」）。DB や索引は持たない。更新の遅れ、置き場所、作り直しの手順が増え、ログの形が変わったときに壊れる場所も増えるため。公式にセッション検索が来たら、`talk.rs`・`codex.rs`・`needle.rs`・`recall.rs`・`cache.rs`・`lines.rs`・`build.rs`・`cli.rs` の `search`/`show` の分岐・`main.rs` の `search`/`show` 関数を消せば終わる形にしてある（`load.rs` の `select_files` / `read_all` は残って `repeats` などが使う）。
 
 ### Codex のログ（`search`・`show`）
 
-2026-10-17 に足した。`--source claude|codex|all` で選ぶ。既定は search が claude、show が all。Codex のログは Claude の 20 倍あり（全部を読むのに 5 秒と 0.4 秒）、今は増えないので、search は頼まれたときだけ読む（`--source` か `--codex-root` を渡したとき。`--codex-root` だけなら all）。show は Codex の id をファイル名で探すので、両方を見ても軽い。`--codex-root DIR`（何度でも）で置き場所を渡す。既定は `~/.codex/sessions` と `~/.codex/archived_sessions` のうち、あるもの。写しを読むときは、写しの `sessions` と `archived_sessions` の 2 か所を渡す。`repeats`・`tool`・`daily` は今も Claude だけ（`--source`・`--codex-root` を付けると入力の誤り、終了コード 2）。`--source codex` だけで置き場所がなければ終了コード 3。`all` のとき Codex がない機械は黙って飛ばす。出力の各行（JSON は `source`）と `show` の見出しに `claude` / `codex` の印が付く。
+`--source claude|codex|all` で選ぶ。既定は search が claude、show が all。Codex のログは大きいので、search は頼まれたときだけ読む（`--source` か `--codex-root` を渡したとき。`--codex-root` だけなら all）。show は Codex の id をファイル名で探すので、両方を見ても軽い。`--codex-root DIR`（何度でも）で置き場所を渡す。既定は `~/.codex/sessions` と `~/.codex/archived_sessions` のうち、あるもの。写しを読むときは、写しの `sessions` と `archived_sessions` の 2 か所を渡す。`repeats`・`tool`・`daily` は今も Claude だけ（`--source`・`--codex-root` を付けると入力の誤り、終了コード 2）。`--source codex` だけで置き場所がなければ終了コード 3。`all` のとき Codex がない機械は黙って飛ばす。出力の各行（JSON は `source`）と `show` の見出しに `claude` / `codex` の印が付く。
 
-**ファイル.** `rollout-<時刻>-<uuid>.jsonl`。時刻はそのマシンの地方時で、日付のフォルダ（`YYYY/MM/DD`）も同じ。行は `{"timestamp":UTC,"ordinal":N,"type":…,"payload":{"type":…}}`。1 行目は `session_meta`（id・`cwd`・`originator`、サブエージェントなら `source.subagent`・`parent_thread_id`・`subagent_history_start_ordinal`）。実際のログ（2026-02〜10、1,815 ファイル、約 26 GB）は、`token_count`・`item_completed`・`reasoning`・ツールの出力が大半で、メッセージの行は 1 割に満たない（約 177 万行のうち約 15 万）。
+**ファイル.** `rollout-<時刻>-<uuid>.jsonl`。時刻はそのマシンの地方時で、日付のフォルダ（`YYYY/MM/DD`）も同じ。行は `{"timestamp":UTC,"ordinal":N,"type":…,"payload":{"type":…}}`。1 行目は `session_meta`（id・`cwd`・`originator`、サブエージェントなら `source.subagent`・`parent_thread_id`・`subagent_history_start_ordinal`）。実際のログは、`token_count`・`item_completed`・`reasoning`・ツールの出力が大半で、メッセージの行は少ない。
 
 | 行 | 扱い |
 |---|---|
@@ -205,9 +210,9 @@ devsrv
 | `<send_user_message_question_reply>` | アプリの選択肢への返事（JSON）。`answer` だけを発言にする。`question` は assistant の言葉なので入れない |
 | サブエージェントのセッション（`session_meta` に `source.subagent` か `parent_thread_id`）の `user` | 親が書いた依頼文なので `who` を `task` に。T3 Code の定型（Claude と同じ一覧）と、`You are working inside Orca` で始まる文も `task` |
 
-実際のログの `user` ブロックの書き出しを数えて決めた（`<…>` や `# …` で始まるものを多い順に見た）。上の一覧にないものが `--who user` に混ざったら、`codex.rs` の `INJECTED`（タグ）か `INJECTED_STARTS`（書き出し）に足す。`# Diff comments:`・`# Browser comments:` は利用者が書いたコメントなので残す。
+`user` ブロックの書き出しを見て決めた（`<…>` や `# …` で始まるものを多い順に見た）。上の一覧にないものが `--who user` に混ざったら、`codex.rs` の `INJECTED`（タグ）か `INJECTED_STARTS`（書き出し）に足す。`# Diff comments:`・`# Browser comments:` は利用者が書いたコメントなので残す。
 
-**サブエージェントの複製.** 親から分岐したサブエージェントのファイルは、先頭に親の行の写しを持つ（`subagent_history_start_ordinal` より小さい `ordinal`）。そのまま読むと同じ発言が親の数だけ出る（実際のログで 1 つの発言が 59 回）ので、その `ordinal` 未満の行は飛ばす。これで残った重複は、Codex の全発言 5.88 万行のうち 84 行（0.14%）。
+**サブエージェントの複製.** 親から分岐したサブエージェントのファイルは、先頭に親の行の写しを持つ（`subagent_history_start_ordinal` より小さい `ordinal`）。そのまま読むと同じ発言が親の数だけ出るので、その `ordinal` 未満の行は飛ばす。
 
 **id.** Codex の id は UUIDv7 で先頭が時刻なので、同じ時期のセッションは先頭 8 文字が同じになる。そこで**末尾 8 文字**（乱数の部分）で表す。`show SESSION` は id の**どの部分でも**受け付け（含まれていれば当たり。完全な UUID も可）、複数に当たれば Claude と同じく候補を出して終了コード 2。Claude の id は先頭一致のまま。`/` を含む指定は Claude のサブエージェント用で、Codex は探さない。
 
@@ -219,25 +224,11 @@ devsrv
 
 **速さ.** 行の先頭の約 200 バイトで種類を決め（`"type":"response_item","payload":{"type":"message"` など）、メッセージ（`show` ではツールの呼び出しも）以外の行は JSON に読まず、長い行は取っておかずに飛ばす。`search` はさらに、`needle.rs` が正規表現から取り出した文字列が生の行になければ、メッセージも JSON に読まない。取り出すのは、一致に必ず含まれ、JSON のなかで書き方が変わらない文字だけ。`"`・`\`・制御文字（改行・タブ）は JSON では `\"`・`\\`・`\n`・`\t` と 2 文字になり、`.`・`\s`・`[^x]` の数える文字数も変わるので、そこで途切れる。`?`・`*`・`{` が付いた直前の 1 文字は外し、`(…)` と `[…]` の中は見ない。`|` は各候補から取り出し、1 つでも取り出せなければ絞り込みなし。`(?` を含む式（フラグ）も絞り込みなし。`-i` は ASCII の大小だけを無視して探す（大小のある ASCII 以外の文字が入るところでは途切れる）。非 ASCII の文字を含む文字列は、`\uXXXX` と書かれた行（まれ）も通す。絞り込みは「通してしまう」ことはあっても「落とす」ことはない（最後に正規表現が決める）。`tests/cli.rs` の `codex_search_finds_what_the_log_writes_differently` が、改行・引用符・タブ・大小・日本語・`|` の式で確かめる。
 
-2026-10-17 に測った Codex の写し（26 GB、1,815 ファイル。2 回目以降でページキャッシュに載った状態）での測定（`hyperfine -N`、5 回。メモリは最大使用量）：
-
-| 式 | 平均 |
-|---|---|
-| `search Planconfig --source codex`（2 か所を渡す） | 4.96 s ± 0.20（メモリ 409 MiB） |
-| `search Planconfig`（Claude の 1.3 GB も） | 5.64 s ± 0.21 |
-| `search planconfig -i --source codex` | 4.84 s ± 0.08 |
-| `search '\d{20}' --source codex`（取り出せる文字列なし。全メッセージを JSON に読む） | 約 5.2 s（1 回） |
-| `search Planconfig --source codex --since 2026-09-01` | 1.97 s ± 0.13 |
-| `search Planconfig --source codex --since 2026-10-10`（更新時刻が窓より前のファイルは開かない） | 0.03 s |
-| `rg -l Planconfig`（同じ場所。比べるため） | 4.56 s ± 0.20（メモリ 196 MiB） |
-
-時間のほとんどは、ファイルを読むこと自体（`rg` に 1 割ほど足した程度）。文字列での絞り込みは、メッセージを JSON に読む手間（画像つきの長いメッセージなど）を省くだけで、効きは全体の 1 割弱。`repeats` などが読む Claude のログの読み方は変えていない。
-
 **限り.** 行の種類を先頭の `"type":"response_item","payload":{"type":"` で見分けるので、Codex が書き出しのキーの並びを変えると、何も見つからなくなる（エラーにならず、テストも手で書いた今の並びなので気づけない）。Codex を更新したあとは、知っている言葉で `search --source codex` が当たるかを一度見る。`cwd` はセッションを動かしたマシンのパス（ssh 先ならリモート側）。時刻は UTC で、表示は Claude と同じく地方時の分まで。
 
 ### timeline
 
-2026-10-17 に足した。振り返り・引き継ぎ・決定の記録を書くとき、`git log` と記憶を手で突き合わせていたのを、機械にしたもの。あるリポジトリで「利用者が何を言ったか」と「何がコミットされたか」を、時刻順に 1 本に並べる。`search` が読むセッション（`talk.rs`・`codex.rs`）と `git log` の上に薄く作ってあり、DB も索引も持たない。
+振り返り・引き継ぎ・決定の記録を書くとき、`git log` と記憶を手で突き合わせていたのを、機械にしたもの。あるリポジトリで「利用者が何を言ったか」と「何がコミットされたか」を、時刻順に 1 本に並べる。`search` が読むセッション（`talk.rs`・`codex.rs`）と `git log` の上に薄く作ってあり、DB も索引も持たない。
 
 ```
 $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10-04
@@ -277,21 +268,21 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 中の行が 1 つ以上あり、外の行以下（半分以上がリポジトリ）なら、そのセッションの発言を全部入れる。判断は窓の中の行だけで行うので、長く生きるセッションでも、窓を絞れば（その日だけ別のリポジトリで作業していたなら、その日に窓を合わせれば）そのとき作業していた側で決まる。
 
 - **T3 Code の作業ツリー.** `~/.t3/worktrees/<リポジトリ名>/<ブランチ名>`。消した作業ツリーは `git worktree list` に出ないが、ログには残っているので、リポジトリ名（主たる作業ツリーのディレクトリ名）から場所を決めて拾う。同じ名前の別のリポジトリがあれば混ざる。
-- **親のフォルダで開いたセッション.** Claude Code はセッションをフォルダ名（開いた場所）ごとのディレクトリに置くので、`~/project/prod/shop` で開いたセッションは `web` や `api` の作業のあとも `shop` のフォルダに入る。フォルダ名や最初の `cwd` で選ぶと、作業した場所に関係なく親の名前の下に落ちる（実際に、あるリポジトリの利用者の発言の相当な割合が、親のフォルダのセッションにあった）。行ごとの `cwd` で判定するのはこのため。
+- **親のフォルダで開いたセッション.** Claude Code はセッションをフォルダ名（開いた場所）ごとのディレクトリに置くので、`~/project/prod/shop` で開いたセッションは `web` や `api` の作業のあとも `shop` のフォルダに入る。フォルダ名や最初の `cwd` で選ぶと、作業した場所に関係なく親の名前の下に落ちる。行ごとの `cwd` で判定するのはこのため。
 
-**拾いすぎと拾い漏れ（2026-10 の実ログで見た形）.**
+**拾いすぎと拾い漏れ.**
 
 - 拾いすぎ：1 つのセッションが日をまたいで別のリポジトリ（`shop/api`）にも移ったとき、窓にその日が入っていれば、そのリポジトリでの発言も入る（そのセッションの発言の一部は、作業の場所が `shop/api` だった）。窓をその日以外に絞れば外れる。
 - 拾い漏れ：リポジトリの中で作業しない会話は入らない。スクラッチの会話（`~/.t3/scratch/…`）や別のプロジェクトで、そのリポジトリの話をしたもの。名前では `--project` で拾える。
 - 外れない：サブエージェントの依頼だけのセッション（T3 Code の `Delegated task` など）は、`user` の発言がないので、`--who user` では行にならない。
 
-**速さ.** 窓の中の `user`・`assistant` の行だけを JSON に読む（`search` と同じ）。`cwd` の数え上げは、すでに読んだ行の `cwd` を見るだけで、読む行を増やさない。`git log` は 15 ms ほど。全ログ（Claude 1.3 GB、10 月分）で、既定の窓も `--since 2026-01-01` も `search` とほぼ同じ 0.5 秒ほど（`hyperfine -N`）。控えを入れたあとの数字は、下の「控え」の表。
+**速さ.** 窓の中の `user`・`assistant` の行だけを JSON に読む（`search` と同じ）。`cwd` の数え上げは、すでに読んだ行の `cwd` を見るだけで、読む行を増やさない。`git log` を 1 回呼ぶ。
 
 **なぜ DB を持たないか／公式が来たら.** `search` と同じ。公式にセッションの要約・引き継ぎが来たら、`timeline.rs`・`main.rs` の `timeline` 関数・`cli.rs` の `timeline` の分岐を消せば終わる（`Session.cwds` は残っても害はない）。
 
 ### memory と rules
 
-2026-10-20 に足した。ここまでの命令はセッションのログを読むが、この 2 つはエージェントが残したメモリのファイルを読む。控え（キャッシュ）は使わない（ファイルは小さく、数百件）。`build.rs` の「読み方」には数えない（`memory.rs`・`rules.rs` は `NOT_READERS`）。
+ここまでの命令はセッションのログを読むが、この 2 つはエージェントが残したメモリのファイルを読む。控え（キャッシュ）は使わない（ファイルは小さい）。`build.rs` の「読み方」には数えない（`memory.rs`・`rules.rs` は `NOT_READERS`）。
 
 **メモリの置き場.** Claude Code：`~/.claude/projects/<符号化したパス>/memory/*.md`。先頭の frontmatter に `name`・`description`・`metadata.type`（`user`・`feedback`・`project`・`reference`。古いファイルは `type` が直下）。`MEMORY.md` はほかのファイルの索引。Codex：`~/.codex/memories/` の下の `.md`（`raw_memories*.md`・`rollout_summaries/` も。形は自由で type はない）。
 
@@ -315,9 +306,9 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 
 ### 控え（`~/.cache/agentlog/`）
 
-2026-10-17 に足した。`search`・`show`・`timeline` が毎回ログ全体を読むと、ログの量に比例して遅くなる（2026-10-17 の測定で、Claude 1.3 GB が 0.5〜0.7 秒、Codex 26 GB の写しが 5 秒。Claude のログは 1 週間で 715 MB 分のファイルが更新される）。ところが読み取るのは会話の本文（人の発言と assistant の `text`）だけで、これはログの 1% に満たない（Claude の 60 ファイルで 0.7%。残りはツールの入出力・thinking・メタ情報）。そこで、**ログのファイルごとに、読み取った結果の写しを置き**、ログが追記されたら増えた分だけを読み足す。
+`search`・`show`・`timeline` が毎回ログ全体を読むと、ログの量に比例して遅くなる。ところが読み取るのは会話の本文（人の発言と assistant の `text`）だけで、これはログのごく一部（残りはツールの入出力・thinking・メタ情報）。そこで、**ログのファイルごとに、読み取った結果の写しを置き**、ログが追記されたら増えた分だけを読み足す。
 
-**並列にする案は先に済んでいた.** 読みを `available_parallelism()` の数のスレッドに分ける作り（`load::read_all`）は、`repeats` だけでなく `search`・`show`・`timeline` も使っていた。2026-10-17 の測定で、Claude は CPU 時間が実時間の 3.5 倍ほど（8 コア）。Codex の 26 GB はディスクから読むこと自体が支配的で（`sys` が `user` の 3.5 倍）、スレッドを 2 倍・4 倍にしても 5.2 s が 4.9 s になるだけだった。そこで読みの並べ方は変えていない。控えが効くのは、読む量そのものを減らすため。
+**並列は控えと別.** 読みを `available_parallelism()` の数のスレッドに分ける作り（`load::read_all`）は、`repeats` だけでなく `search`・`show`・`timeline` も使う。大きいログではディスクから読むこと自体が支配的で、スレッドを増やしても変わらない。控えは、読む量そのものを減らす。
 
 #### 置き場所と名前
 
@@ -360,7 +351,7 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 | 今の大きさが `pos` より小さい、または指紋が違う | 小さくなった・書き換わった。最初から読み直して、控えを書き直す |
 | 控えが途中で切れている、読めない、形が違う | 使わない（上と同じ） |
 
-- **途中で切れた最後の行.** 改行で終わっていない最後の行は、書いている途中かもしれないので**読まない**。`pos` はその行の手前（最後の改行の次）で、次の実行がそこから読む。`--raw` も同じ規則で読むので、同じ結果になる（以前は、改行のない最後の行が完全な JSON なら読んでいた。実際のログは必ず改行で終わる）。
+- **途中で切れた最後の行.** 改行で終わっていない最後の行は、書いている途中かもしれないので**読まない**。`pos` はその行の手前（最後の改行の次）で、次の実行がそこから読む。`--raw` も同じ規則で読むので、同じ結果になる（実際のログは必ず改行で終わる）。
 - **指紋は FNV-1a 64 ビット.** 「同じ inode のまま、同じ先頭で、途中から書き換わったファイル」を、追記と取り違えないため。Claude Code や Codex のログは追記だけなので、普段は通るだけ。
 - **控えは全部入れて持つ.** 追記で読み足すときは、`search` が要らない種類（ツールの行、作業ディレクトリ）も含めて足す。どのコマンドで作られた控えも、どのコマンドにも使える。
 - **書き込み.** 隣の一時ファイルに書いて `rename` する（読む側が書きかけを見ない。同時に 2 回動いても、どちらかの完全な控えが残る）。
@@ -373,7 +364,7 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 1. **`format`（数）.** 控えの**作り**（上の形）を変えたときに、人が上げる。`cache.rs` の `FORMAT`。
 2. **`reader`（ハッシュ）.** ログから何を取り出すかを決めるソース（`talk.rs`、`codex.rs`、`cache.rs`、`lines.rs`、`time.rs`。`build.rs` が `src/*.rs` から出力・集計だけのファイルを除いたもの）の中身をビルドのたびにハッシュにして（`AGENTLOG_READER`）、控えの見出しに入れる。**読み方のコード（人の発言の見分け、差し込みの一覧、ツールの 1 行など）を 1 文字でも変えると、ハッシュが変わり、古い控えは使われず、最初から作り直される。** 人が版を上げる必要がない。`build.rs` の除外の一覧（`cli.rs` など、読み取った結果を数える・出すだけのファイル）は、新しいファイルを足したときに既定で読み方に数える向きにしてある（要らない作り直しが増えるだけで、答えは誤らない）。
 
-作り直しは 1 回目の実行だけが遅い（2026-10-17 の測定で、Claude 全体が 1 秒ほど、Codex の写しが 6〜8 秒）。コメントだけを直しても `reader` は変わるので、開発中は作り直しが増える（`cargo install` のたびに一度）。
+作り直しは 1 回目の実行だけが遅い。コメントだけを直しても `reader` は変わるので、開発中は作り直しが増える（`cargo install` のたびに一度）。
 
 読み方のコードを変えずにログの形が変わったとき（Claude Code や Codex の更新）は、`reader` は変わらないので、控えは古い読み方のままの結果を返す。**`--raw` で同じ問い合わせを流して食い違いを見て、控えのフォルダを消す**（`docs/recipes.md`）。
 
@@ -385,43 +376,31 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 
 `--since`・`--until`・`--project`・`--exclude`、実行中のセッションを外す動き、Codex の重複の選び方（`sessions/` と `archived_sessions/` で同じ id は大きい方、分岐したサブエージェントの親の写しを飛ばす）は、すべて今までどおり。ファイルの選び方（更新時刻が窓より前なら開かない、重複の選択）は控えより前、窓の当て方（発言の時刻、`cwd` の数え上げ）は控えを読んだあと。親の写しの境目（`own_from`）と Claude の差し込みの除外は、読み方の中（控えに入る前）で済む。
 
-#### 読み方の変更（控えを入れたときに揃えたもの）
+#### 読み方の揃え
 
-1 つの規則を `--raw` と控えで共有するために、読み方を次のとおり揃えた。
+1 つの規則を `--raw` と控えで共有するために、読み方を次のとおり揃えている。
 
-- 言葉のある行（`"text"` か `"content":"` を含む行）だけが、セッションの `cwd`・`sessionId`・`cwd` の数え上げに使われる。以前は `show` だけがツール呼び出しだけの行も使っていた（最初の行は人の発言なので、実ログでは変わらなかった）。
+- 言葉のある行（`"text"` か `"content":"` を含む行）だけが、セッションの `cwd`・`sessionId`・`cwd` の数え上げに使われる。ツール呼び出しだけの行は使わない。
 - Claude のログの行は、バイト列として読む。UTF-8 でない行があっても、そのファイル全体を捨てずに、その行だけ飛ばす。
 - 改行のない最後の行は読まない（上）。
 
 #### なぜ DB（SQLite の FTS など）にしないか
 
-DB や全文索引は、更新の管理（どこまで入れたか、消えたログ、壊れたとき）に加えて、日本語の区切り（形態素解析か n-gram か）と、その版の管理が要る。控えは、ログのファイルごとの**元のログから作り直せる写し**で、消しても次の 1 回が遅いだけ。正本はログのまま 1 か所で、2 か所に持たない。検索そのものは正規表現を控えの本文に当てる（全件を線形に見る）が、控えは 1% 前後に縮んでいるので 50 ミリ秒前後で済み、索引で速くする余地が小さい。索引の管理は要らないと決めた（2026-10-17、利用者）。
+DB や全文索引は、更新の管理（どこまで入れたか、消えたログ、壊れたとき）に加えて、日本語の区切り（形態素解析か n-gram か）と、その版の管理が要る。控えは、ログのファイルごとの**元のログから作り直せる写し**で、消しても次の 1 回が遅いだけ。正本はログのまま 1 か所で、2 か所に持たない。検索そのものは正規表現を控えの本文に当てる（全件を線形に見る）が、控えは元のログよりずっと小さいので、索引で速くする余地が小さい。索引の管理は要らない。
 
 公式にセッションの検索が来たら、控えのフォルダごと消し、`cache.rs`・`lines.rs`・`build.rs`・`--raw` を外す（`talk::read_lines`・`codex::read_lines` は `Extract` を返す形のまま、直接読む形に戻せる）。
 
-#### 速さ（2026-10-17、この Mac、8 コア、`hyperfine`）
+#### 速さ
 
-Claude 全体（1.4 GB、909 ファイル）と Codex の写し全体（26 GB、1,816 ファイル）。平均 ± 標準偏差、`hyperfine -N`。「控えなし」は main（この変更の前）、`--raw` は今のコードで控えを使わない場合、「1 回目」は控えがない状態から作る実行（4 回の幅）、「2 回目以降」は控えがあるとき。この Mac は他の処理で揺れ、同じ式でも 0.6〜1.0 秒の幅が出る（`search` の「控えなし」は静かなときの 0.55〜0.65 秒が多い）。
-
-| 式 | 控えなし（main） | `--raw` | 1 回目（控えを作る） | 2 回目以降 |
-|---|---|---|---|---|
-| Claude `search worktree` | 1.04 s ± 0.36 | 0.86 s ± 0.38 | 0.9〜1.2 s | **45 ms ± 2** |
-| Claude `timeline --since 2026-10-01` | 0.55 s ± 0.14 | 0.44 s ± 0.04 | 0.86〜0.90 s | **85 ms ± 13** |
-| Claude `show ID --at …` | 141 ms ± 3 | 138 ms ± 6 | 0.16〜0.22 s | **80 ms ± 47**（中央値は 60 ms 台） |
-| Codex `search worktree --source codex` | 5.11 s ± 0.10 | 5.33 s ± 0.31 | 6.1〜7.9 s | **66 ms ± 8** |
-| Codex `timeline --since 2026-06-01` | 3.63 s ± 0.25 | 3.69 s ± 0.35 | 未測定（`search` と同じ作り直し） | **121 ms ± 27** |
-| Codex `show ID --at …` | 572 ms ± 8 | 663 ms ± 105 | 0.65〜0.88 s | **88 ms ± 17** |
-
-- **控えの大きさ.** Claude 18 MB（ログの 1.3%、909 ファイル）、Codex 46 MB（ログの 0.18%、1,816 ファイル）。合計 64 MB、2,726 ファイル。
-- **`--raw` は main と同じ速さ.** 読み方を揃えたことによる遅れはない。控えを作る 1 回目だけは、ツール呼び出しの行も読むので 1.2〜1.5 倍かかる。
-- **並列は元からあった.** スレッドに分ける作りは `search`・`show`・`timeline` ですでに使われていて（CPU 時間が実時間の 3.5 倍）、Codex の 26 GB は読むこと自体が支配的（スレッドを 2 倍・4 倍にしても 5.2 s → 4.9 s）。そのため読みの並べ方は変えていない。ディスクの速さが上限の 1 回目は、控えでは減らせない。
-- **2 回目以降の中身.** 45〜120 ms のほとんどは、ログの一覧と `stat`（Claude 909 個、Codex 1,816 個）と、控えの読み出し。ログが 10 倍に増えても、読む量は更新されたファイルの増えた分だけ。
+- **2 回目以降.** ログの一覧と `stat`、控えの読み出しだけで済む。読む量は、更新されたファイルの増えた分だけ。
+- **1 回目（控えを作る実行）.** ログ全体を読むので、ログの量に応じてかかる。ディスクの読みが上限なので、控えでは減らせない。ツール呼び出しの行も読むので、`--raw` より少し重い。
+- **並列.** 読みはスレッドに分ける（`load::read_all`）。控えの有無によらない。
 
 #### 限り
 
 - **ログの形が変わったとき.** `reader` のハッシュは読み方のコードの変更しか見ない。ログの側が変わったら、`--raw` と突き合わせて控えを消す（上）。
 - **中身の書き換わりを見ない.** 大きさも更新時刻も同じまま中身だけが変わったファイルは、控えを信じる。同じ inode で、先頭と読んだ位置の直前（各 4 KB）の指紋が同じまま、間だけが書き換わり、長さが増えた場合も追記と取り違える。ログは追記だけなので、実際には起きない。
-- **指紋の読み出しは追記のたびに 8 KB.** 実行中のセッションのログは、1 回ごとに控えを書き直す（控えは数百 KB まで）。
+- **指紋の読み出しは追記のたびに 8 KB.** 実行中のセッションのログは、1 回ごとに控えを書き直す。
 - **古い版の控えは、そのログが読まれるまで残る.** `reader` が変わっても、古い控えを一斉には消さない（読まれたものから書き直す）。消したいときはフォルダごと消す。
 
 ## ほかに考えた形
@@ -432,10 +411,10 @@ Claude 全体（1.4 GB、909 ファイル）と Codex の写し全体（26 GB、
 
 ## 未決と危険
 
-- **逃げの誤判定.** 失敗の直後に、無関係のファイルを Write すると「逃げた」に数えられる。10 月の rpatch では 15 回のうち 3〜4 回がそうだった（`/tmp` 以外への新しいスクリプト）。
+- **逃げの誤判定.** 失敗の直後に、無関係のファイルを Write すると「逃げた」に数えられる。`/tmp` 以外への新しいスクリプトなど。
 - **シグネチャの分かれ方.** プログラムの取り方で分かれることがある（`cat > x <<EOF && rpatch …` は `Bash cat`）。`tool` は正規表現で当てるので影響しない。
 - **ログの形式.** Claude Code のログの形が変わると読めなくなる。`tool_use` / `tool_result` / `is_error` / `timestamp` / `Exit code N` に頼っている。`repeats`・`tool`・`daily` は Codex のログを読まない（`search`・`show` だけが読む。上の「Codex のログ」）。
 - **今のセッション.** `CLAUDE_CODE_SESSION_ID` があれば、パスにその ID を含むファイル（本体とサブエージェント）を外す。分析そのものの呼び出し（エラーの文字列を grep した、など）が、分析の結果に混ざるため。ターミナルから直接呼ぶと変数がないので、そのセッションの ID を `--exclude` で渡す。
 - **`search` の見分けは経験則.** 人の発言と T3 Code が送る依頼文は、ログの印では区別できない。一覧にない新しい定型が来ると、`--who user` に混ざる。`--exclude t3code-claude-title` のように、題名づけ用の一時セッションをフォルダ名で外す手もある。
-- **再開したセッションの複製.** 再開や分岐で、前のセッションの行が新しいファイルに写されることがあり、`search` が同じ発言を 2 つのセッションで見つけることがある（10 月分で `OK` を探した 487 件のうち、時刻・発言・誰が同じものが 11 件）。重複は消していない（どちらのセッションの id も本物のため）。
+- **再開したセッションの複製.** 再開や分岐で、前のセッションの行が新しいファイルに写されることがあり、`search` が同じ発言を 2 つのセッションで見つけることがある。重複は消していない（どちらのセッションの id も本物のため）。
 - **書き出されなかった発言.** Claude Code が `queue-operation`（実行中に打った文の待ち行列）にしか書かなかった文や、ログに残らなかった文は見えない。
