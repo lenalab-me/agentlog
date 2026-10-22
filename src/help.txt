@@ -135,7 +135,9 @@ Codex logs (search, show and timeline; repeats, tool and daily read Claude Code'
   Not the user's words in a Codex log: what the app adds to a user message (browser and
   environment context, AGENTS.md, plugin lists, attachment lists, image tags, interrupts,
   subagent notices). Prompts in a subagent's session are task. Reasoning is left out.
-  A forked subagent's file begins with copies of its parent's lines; they are skipped.
+  A forked subagent's file begins with copies of its parent's lines; they are skipped. So
+  are those a session the user forked begins with (forked_from_id without history_base):
+  written as the fork is made, all stamped within seconds of its first line.
   Lines that cannot be messages are not parsed.
 
 Cache (search, show, timeline): one file per log under ~/.cache/agentlog/<claude|codex>-<hash of

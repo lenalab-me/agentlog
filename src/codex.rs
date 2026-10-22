@@ -360,6 +360,9 @@ fn codex_line(n: usize, line: &[u8], pre: Option<&Prefilter>, ex: &mut Extract) 
     let Some(ts) = str_field(&v, "timestamp").and_then(time::parse_iso) else {
         return;
     };
+    if ts <= ex.copy_until {
+        return;
+    }
     let Some(p) = v.get("payload") else { return };
     if !is_message {
         ex.events.push(Event {
@@ -419,7 +422,20 @@ fn meta(line: &[u8], ex: &mut Extract) {
     ex.subagent = p.pointer("/source/subagent").is_some()
         || p.get("parent_thread_id").is_some()
         || str_field(p, "thread_source") == Some("subagent");
+    // A session forked by the user (`forked_from_id`) that does not point at its parent's
+    // history (`history_base`) starts with a copy of the parent's lines, written as it is
+    // made, all stamped then: within a second or so of this line, long before anything is
+    // typed in the fork.
+    let copied = p.get("forked_from_id").is_some()
+        && p.get("history_base").is_none()
+        && p.get("subagent_history_start_ordinal").is_none();
+    if copied && let Some(t) = str_field(&v, "timestamp").and_then(time::parse_iso) {
+        ex.copy_until = t + COPY_SECS;
+    }
 }
+
+/// How long after a fork's first line its copy of the parent's lines may still be written.
+const COPY_SECS: i64 = 5;
 
 /// The session an extract stands for, cut to the window.
 fn session_of(path: &Path, ex: Extract, f: &Filter) -> Session {

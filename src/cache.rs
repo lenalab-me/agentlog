@@ -22,7 +22,7 @@ use crate::talk::{Event, Who};
 
 /// The layout of the cache. Raise it when the layout below changes. When the code that reads
 /// logs changes, `build.rs` sees to it: it hashes those sources into `READER`.
-const FORMAT: u64 = 1;
+const FORMAT: u64 = 2;
 const READER: &str = env!("AGENTLOG_READER");
 
 /// Bytes at the start of the file, and just before where reading stopped, that must be the
@@ -51,6 +51,9 @@ pub struct Extract {
     /// ordinal; and whether the session is a subagent's.
     pub own_from: u64,
     pub subagent: bool,
+    /// Codex: a session the user forked starts with a copy of its parent's lines, stamped
+    /// up to this time (0: none).
+    pub copy_until: i64,
     pub events: Vec<Event>,
     /// Claude: for each working directory, the time of each line with words in it.
     pub cwd_lines: BTreeMap<String, Vec<i64>>,
@@ -205,6 +208,7 @@ fn header_of(path: &Path, st: &Stat, line: &[u8]) -> Option<(State, Extract)> {
         inner: v.get("inner").and_then(Value::as_str).map(str::to_string),
         own_from: num("own_from")?,
         subagent: v.get("subagent")?.as_bool()?,
+        copy_until: int("copy_until")?,
         ..Extract::default()
     };
     let same =
@@ -306,7 +310,7 @@ fn store(file: &Path, log: &Path, st: &Stat, pos: u64, ex: &Extract) -> io::Resu
         "ino": st.ino, "dev": st.dev,
         "pos": pos, "head": head, "tail": tail,
         "cwd": ex.cwd, "inner": ex.inner,
-        "own_from": ex.own_from, "subagent": ex.subagent,
+        "own_from": ex.own_from, "subagent": ex.subagent, "copy_until": ex.copy_until,
     });
     let mut out = format!("{header}\n");
     for e in &ex.events {

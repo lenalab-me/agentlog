@@ -1918,3 +1918,70 @@ fn search_shows_a_copied_history_once_and_reads_a_cut_emoji() {
         ]
     );
 }
+
+#[test]
+fn a_codex_fork_by_the_user_does_not_say_its_parents_words_again() {
+    let d = tempfile::tempdir().unwrap();
+    let parent = "019f0000-aaaa-7000-8000-00000000f001";
+    let fork = "019f0000-aaaa-7000-8000-00000000f002";
+    let based = "019f0000-aaaa-7000-8000-00000000f003";
+    write_raw(
+        &cx_file(d.path(), CX_DAY, CX_LOCAL, parent),
+        &[
+            cx_meta(parent, "2026-10-02T05:00:00.000Z", CX_CWD, ""),
+            cx_msg(
+                1,
+                "2026-10-02T05:00:05.000Z",
+                "user",
+                &["ZEBRA rename the widget"],
+            ),
+        ],
+    );
+    // The fork writes a copy of its parent's lines as it is made, all stamped then.
+    let from = format!(r#","forked_from_id":"{parent}""#);
+    write_raw(
+        &cx_file(d.path(), CX_DAY, "2026-10-02T15-00-00", fork),
+        &[
+            cx_meta(fork, "2026-10-02T06:00:00.000Z", CX_CWD, &from),
+            cx_msg(
+                1,
+                "2026-10-02T06:00:00.400Z",
+                "user",
+                &["ZEBRA rename the widget"],
+            ),
+            cx_msg(
+                2,
+                "2026-10-02T06:01:00.000Z",
+                "user",
+                &["ZEBRA now the gadget"],
+            ),
+        ],
+    );
+    // A fork that points at its parent's history holds only its own lines.
+    let base = format!(r#","forked_from_id":"{parent}","history_base":{{"thread_id":"{parent}"}}"#);
+    write_raw(
+        &cx_file(d.path(), CX_DAY, "2026-10-02T16-00-00", based),
+        &[
+            cx_meta(based, "2026-10-02T07:00:00.000Z", CX_CWD, &base),
+            cx_msg(
+                1,
+                "2026-10-02T07:00:01.000Z",
+                "user",
+                &["ZEBRA said at once"],
+            ),
+        ],
+    );
+    let h = cx_hits(d.path(), &["ZEBRA"]);
+    let got: Vec<(&str, &str)> = h
+        .iter()
+        .map(|h| (h["id"].as_str().unwrap(), h["snippet"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("0000f001", "ZEBRA rename the widget"),
+            ("0000f002", "ZEBRA now the gadget"),
+            ("0000f003", "ZEBRA said at once"),
+        ]
+    );
+}

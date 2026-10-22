@@ -16,6 +16,7 @@ const SID1: &str = "11111111-aaaa-4000-8000-000000000001";
 const SID2: &str = "22222222-bbbb-4000-8000-000000000002";
 const CX1: &str = "019f0000-aaaa-7000-8000-00000000c001";
 const CXSUB: &str = "019f0000-aaaa-7000-8000-00000000c002";
+const CXFORK: &str = "019f0000-aaaa-7000-8000-00000000c003";
 
 // ---------------------------------------------------------------------------------------
 // Log lines
@@ -148,6 +149,12 @@ impl World {
     fn cxsub(&self) -> PathBuf {
         self.path(&format!(
             "codex/sessions/2026/10/02/rollout-2026-10-02T15-00-00-{CXSUB}.jsonl"
+        ))
+    }
+
+    fn cxfork(&self) -> PathBuf {
+        self.path(&format!(
+            "codex/sessions/2026/10/02/rollout-2026-10-02T16-00-00-{CXFORK}.jsonl"
         ))
     }
 
@@ -484,6 +491,17 @@ fn world() -> World {
         ]),
     )
     .unwrap();
+    // A session the user forked: a copy of the parent's lines, stamped as it was made.
+    let fork = format!(r#","forked_from_id":"{CX1}""#);
+    fs::write(
+        w.cxfork(),
+        lines(&[
+            cx_meta(CXFORK, "2026-10-02T12:00:00.000Z", &cwd, &fork),
+            cx_msg(1, "2026-10-02T12:00:00.300Z", "user", "codex ALPHA question"),
+            cx_msg(2, "2026-10-02T12:02:00.000Z", "user", "own words in the fork"),
+        ]),
+    )
+    .unwrap();
     w
 }
 
@@ -524,6 +542,11 @@ fn what_is_appended_is_read_from_where_the_cache_stopped() {
             cx_msg(5, "2026-10-02T14:10:00.000Z", "user", "APPENDED codex line"),
             cx_call(6, "2026-10-02T14:11:00.000Z", "git status"),
         ]),
+    );
+    // the rest of a fork's copy, read after the cache stopped, is still the copy
+    append(
+        &w.cxfork(),
+        &lines(&[cx_msg(3, "2026-10-02T12:00:01.000Z", "user", "APPENDED copy")]),
     );
     w.agree("lines appended");
     w.expect_hits("APPENDED", 3);
