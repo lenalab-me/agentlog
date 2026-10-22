@@ -232,7 +232,7 @@ fn rpatch_runs_of_failures_and_what_came_next() {
             tool(
                 "2026-10-06T01:01:00Z",
                 "Write",
-                "/a.rs",
+                "/w/src/a.rs",
                 "File written",
                 false,
             ),
@@ -249,7 +249,7 @@ fn rpatch_runs_of_failures_and_what_came_next() {
         json!({
             "fixed on the next call": 1,
             "fixed after 2 failures in a row": 1,
-            "went another way": 1,
+            "went another way on the same file": 1,
             "context ended after it": 1,
         })
     );

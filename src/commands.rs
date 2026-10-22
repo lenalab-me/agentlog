@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::sync::OnceLock;
 
 use regex_lite::Regex;
 use serde_json::{Value, json};
@@ -187,6 +188,9 @@ pub struct Spec {
     pub escape_tools: Vec<String>,
     /// An `alt` match that does not count (writing a new scratch file is not an escape).
     pub ignore: Option<Regex>,
+    /// Going another way is an escape only on a file the failed call was editing: the
+    /// files of both calls are read (`written`) and compared.
+    pub same_file: bool,
 }
 
 pub const PRESETS: &[&str] = &["rpatch", "devsrv"];
@@ -211,6 +215,7 @@ pub fn preset(name: &str) -> Option<Spec> {
             alt_tools: vec!["Edit".into(), "MultiEdit".into()],
             escape_tools: vec!["Write".into()],
             ignore: Some(re(r">\|?\s*/(private/)?tmp/|>\s*/dev/null")),
+            same_file: true,
         }),
         "devsrv" => Some(Spec {
             name: name.into(),
@@ -226,8 +231,302 @@ pub fn preset(name: &str) -> Option<Spec> {
             alt_tools: vec![],
             escape_tools: vec![],
             ignore: None,
+            same_file: false,
         }),
         _ => None,
+    }
+}
+
+// Which files a call edits, to tell going another way on the file that failed from work on
+// another file. Only the plain forms are read; a path in a variable is not known.
+
+struct FileRes {
+    /// A program at the start of a command: `rpatch`, `sed`, `perl`, `sd`.
+    program: Regex,
+    /// `cd DIR` at the start: relative paths after it are under DIR.
+    cd: Regex,
+    /// rpatch: `=== FILE`, `"file": "FILE"`, and the file of `error: edits[N] FILE (…)`.
+    block: Regex,
+    json: Regex,
+    edits: Regex,
+    /// `cat > FILE`, `>| FILE`.
+    cat: Regex,
+    /// python: `open('F', 'w')`, `Path('F').write_text`, and any `Path('F')`.
+    open: Regex,
+    write_path: Regex,
+    path: Regex,
+}
+
+fn file_res() -> &'static FileRes {
+    static RE: OnceLock<FileRes> = OnceLock::new();
+    // A string literal, also inside `python3 -c "…"` where its quotes are escaped.
+    const LIT: &str = r#"\\?['"]([^'"\\]+)\\?['"]"#;
+    RE.get_or_init(|| FileRes {
+        program: re(r"(?m)(?:^|[;&|(])\s*(?:\S*/)?(rpatch|sed|perl|sd)[ \t]"),
+        cd: re(r"^\s*cd\s"),
+        block: re(r"(?m)^===[ \t]+(.+?)[ \t]*$"),
+        json: re(r#""file"\s*:\s*"([^"\\]+)""#),
+        edits: re(r"edits\[\d+\] (\S.*?)(?: \(|: )"),
+        cat: re(r"(?:(?:^|[\s;&|(])cat\s+>\|?|>\|)\s*"),
+        open: re(&format!(
+            r#"open\(\s*[rbuf]*{LIT}\s*,\s*[rbuf]*\\?['"][^'"]*[wa]"#
+        )),
+        write_path: re(&format!(
+            r"Path\(\s*[rbuf]*{LIT}\s*\)\s*\.write_(?:text|bytes)"
+        )),
+        path: re(&format!(r"Path\(\s*[rbuf]*{LIT}\s*\)")),
+    })
+}
+
+/// The words of one shell command at the start of `s`, up to `&&`, `|`, `;`, a newline, a
+/// redirection or `)` outside quotes. An empty quoted word (`''`) is kept.
+fn words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => {
+                quoted = true;
+                cur.extend(chars.by_ref().take_while(|&c| c != '\''));
+            }
+            '"' => {
+                quoted = true;
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => cur.extend(chars.next()),
+                        _ => cur.push(c),
+                    }
+                }
+            }
+            // a line continued with `\` goes on
+            '\\' => cur.extend(chars.next().filter(|&c| c != '\n')),
+            ' ' | '\t' => {
+                if !cur.is_empty() || quoted {
+                    out.push(std::mem::take(&mut cur));
+                    quoted = false;
+                }
+            }
+            '\n' | ';' | '&' | '|' | '<' | '>' | ')' => {
+                // the 2 of `2>&1` is not a word
+                if "<>".contains(ch) && !quoted && cur.bytes().all(|b| b.is_ascii_digit()) {
+                    cur.clear();
+                }
+                break;
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() || quoted {
+        out.push(cur);
+    }
+    out
+}
+
+/// `sed -i [SUFFIX] [-e SCRIPT]... [SCRIPT] FILE...`: the files, or none without -i.
+fn sed_files(args: &[String]) -> Vec<String> {
+    let (mut in_place, mut script, mut pos) = (false, false, Vec::new());
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        if a == "-i" || a == "--in-place" {
+            in_place = true;
+            // BSD: `-i ''` or `-i .bak`; GNU's `-i 's/…/'` is the script
+            if it
+                .peek()
+                .is_some_and(|n| n.is_empty() || n.starts_with('.'))
+            {
+                it.next();
+            }
+        } else if a.starts_with("-i") || a.starts_with("--in-place=") {
+            in_place = true;
+        } else if a == "-e" || a == "-f" || a == "--expression" || a == "--file" {
+            it.next();
+            script = true;
+        } else if a.starts_with("--expression=") || a.starts_with("--file=") {
+            script = true;
+        } else if a.len() > 1 && a.starts_with('-') && !a.starts_with("--") {
+            in_place |= a.contains('i');
+            if a.ends_with('e') || a.ends_with('f') {
+                it.next();
+                script = true;
+            }
+        } else if !a.starts_with("--") {
+            pos.push(a.clone());
+        }
+    }
+    if !in_place {
+        return Vec::new();
+    }
+    pos.into_iter().skip(usize::from(!script)).collect()
+}
+
+/// `perl -pi -e SCRIPT FILE...`: everything after `i` in a switch is its backup suffix.
+fn perl_files(args: &[String]) -> Vec<String> {
+    let (mut in_place, mut script, mut pos) = (false, false, Vec::new());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a.len() > 1 && a.starts_with('-') && !a.starts_with("--") {
+            let flags = &a[1..];
+            let before_i = flags.find('i').map_or(flags, |k| &flags[..k]);
+            in_place |= before_i.len() < flags.len();
+            if before_i.contains(['e', 'E']) {
+                it.next();
+                script = true;
+            }
+        } else if !a.starts_with("--") {
+            pos.push(a.clone());
+        }
+    }
+    if !in_place {
+        return Vec::new();
+    }
+    pos.into_iter().skip(usize::from(!script)).collect()
+}
+
+/// `sd [OPTIONS] FIND REPLACE FILE...`: in a pipe it has no files; `-p` writes nothing.
+fn sd_files(args: &[String]) -> Vec<String> {
+    let mut pos = Vec::new();
+    let mut it = args.iter();
+    let mut options = true;
+    while let Some(a) = it.next() {
+        if !options || !a.starts_with('-') || a == "-" {
+            pos.push(a.clone());
+        } else if a == "--" {
+            options = false;
+        } else if a == "-p" || a == "--preview" {
+            return Vec::new();
+        } else if ["-f", "--flags", "-n", "--max-replacements"].contains(&a.as_str()) {
+            it.next();
+        }
+    }
+    pos.into_iter().skip(2).collect()
+}
+
+/// `rpatch [OPTIONS] FILE <<'EOF'`: the file given as an argument.
+fn rpatch_files(args: &[String]) -> Vec<String> {
+    let mut options = true;
+    for a in args {
+        if options && a == "--" {
+            options = false;
+        } else if !(options && a.starts_with('-')) {
+            return vec![a.clone()];
+        }
+    }
+    Vec::new()
+}
+
+/// `~/` is the home directory, a relative path is under `dir` when it is known, and `.`,
+/// `..` and `/private/tmp` (macOS's `/tmp`) are written out.
+fn normal_path(p: &str, dir: Option<&str>) -> String {
+    let mut s = p.trim().to_string();
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        s = format!("{home}/{rest}");
+    }
+    if let (false, Some(d)) = (s.starts_with('/'), dir) {
+        s = format!("{d}/{s}");
+    }
+    let abs = s.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for part in s.split('/') {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|l| *l != "..") => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    if abs && matches!(parts.as_slice(), ["private", "tmp" | "var", ..]) {
+        parts.remove(0);
+    }
+    let joined = parts.join("/");
+    if abs { format!("/{joined}") } else { joined }
+}
+
+/// The files a call writes (`target`: or the files a failed call of the tool was going to
+/// write, read from its command and its error). Empty: not known.
+fn written(c: &Call, target: bool) -> Vec<String> {
+    if matches!(
+        c.tool.as_str(),
+        "Edit" | "MultiEdit" | "Write" | "NotebookEdit"
+    ) {
+        return vec![normal_path(&c.input, None)];
+    }
+    if c.tool != "Bash" {
+        return Vec::new();
+    }
+    let r = file_res();
+    let cmd = c.input.as_str();
+    let dir =
+        r.cd.find(cmd)
+            .and_then(|m| words(&cmd[m.end()..]).into_iter().next());
+    let dir = dir.map(|d| normal_path(&d, None));
+    let mut files: Vec<String> = Vec::new();
+    for m in r.program.captures_iter(cmd) {
+        let (prog, at) = (&m[1], m.get(0).unwrap().end());
+        let args = words(&cmd[at..]);
+        files.extend(match (prog, target) {
+            ("rpatch", true) => rpatch_files(&args),
+            ("sed", false) => sed_files(&args),
+            ("perl", false) => perl_files(&args),
+            ("sd", false) => sd_files(&args),
+            _ => Vec::new(),
+        });
+    }
+    if target {
+        files.extend(r.block.captures_iter(cmd).map(|m| m[1].to_string()));
+        files.extend(r.json.captures_iter(cmd).map(|m| m[1].to_string()));
+        files.extend(r.edits.captures_iter(&c.result).map(|m| m[1].to_string()));
+    } else {
+        for m in r.cat.find_iter(cmd) {
+            files.extend(words(&cmd[m.end()..]).into_iter().next());
+        }
+        if cmd.contains("python") {
+            files.extend(r.open.captures_iter(cmd).map(|m| m[1].to_string()));
+            files.extend(r.write_path.captures_iter(cmd).map(|m| m[1].to_string()));
+            // `p = Path('F')` … `p.write_text(…)`
+            if files.is_empty() && cmd.contains(".write_") {
+                files.extend(r.path.captures_iter(cmd).map(|m| m[1].to_string()));
+            }
+        }
+    }
+    // a variable or a glob is not a path we can compare
+    files.retain(|f| !f.is_empty() && !f.contains(['$', '`', '*']));
+    let mut files: Vec<String> = files
+        .iter()
+        .map(|f| normal_path(f, dir.as_deref()))
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// Two spellings of one file: the same path, or a relative path that is the end of the other.
+fn same_path(a: &str, b: &str) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    short == long || (!short.starts_with('/') && long.ends_with(&format!("/{short}")))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    Same,
+    Another,
+    Unknown,
+}
+
+fn target_of(failed: &[&Call], next: &Call) -> Target {
+    let aimed: Vec<String> = failed.iter().flat_map(|c| written(c, true)).collect();
+    let wrote = written(next, false);
+    if aimed.is_empty() || wrote.is_empty() {
+        Target::Unknown
+    } else if wrote.iter().any(|w| aimed.iter().any(|a| same_path(a, w))) {
+        Target::Same
+    } else {
+        Target::Another
     }
 }
 
@@ -324,8 +623,10 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
     let mut alt_before = 0;
     let mut outcomes: BTreeMap<String, usize> = BTreeMap::new();
     let mut escapes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut another_file: BTreeMap<String, usize> = BTreeMap::new();
     let mut other_kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut escape_ex: Vec<(i64, String, String, String)> = Vec::new();
+    let mut another_ex: Vec<(i64, String, String, String)> = Vec::new();
     let mut streak_ex: Vec<(i64, String, Vec<String>)> = Vec::new();
 
     let mut by_ctx: Vec<Vec<Ev>> = (0..log.ctxs.len()).map(|_| Vec::new()).collect();
@@ -382,21 +683,49 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
                 Some(Ev::Use { .. }) if n == 1 => "fixed on the next call".to_string(),
                 Some(Ev::Use { .. }) => format!("fixed after {n} failures in a row"),
                 Some(Ev::Alt { call, label, .. }) => {
-                    *escapes.entry(label.clone()).or_default() += 1;
-                    let Ev::Use { call: f, .. } = &evs[j] else {
-                        unreachable!()
+                    let failures: Vec<&Call> = evs[i..=j]
+                        .iter()
+                        .filter_map(|e| match e {
+                            Ev::Use { call, .. } => Some(*call),
+                            _ => None,
+                        })
+                        .collect();
+                    let target = spec.same_file.then(|| target_of(&failures, call));
+                    let f = failures[failures.len() - 1];
+                    let after = if n == 1 {
+                        String::new()
+                    } else {
+                        format!(" after {n} failures")
                     };
-                    escape_ex.push((
+                    let (tag, outcome) = match target {
+                        None => ("", format!("went another way{after}")),
+                        Some(Target::Same) => (
+                            "  (same file)",
+                            format!("went another way on the same file{after}"),
+                        ),
+                        Some(Target::Unknown) => (
+                            "  (file not known)",
+                            format!("went another way, file not known{after}"),
+                        ),
+                        Some(Target::Another) => (
+                            "",
+                            format!("another way on another file{after} (not an escape)"),
+                        ),
+                    };
+                    let ex = (
                         f.ts,
                         log.ctxs[ctx].label.clone(),
                         fail_line(spec, f),
-                        format!("{label}: {}", head(&call.input, 90)),
-                    ));
-                    if n == 1 {
-                        "went another way".to_string()
+                        format!("{label}: {}{tag}", head(&call.input, 90)),
+                    );
+                    if target == Some(Target::Another) {
+                        *another_file.entry(label.clone()).or_default() += 1;
+                        another_ex.push(ex);
                     } else {
-                        format!("went another way after {n} failures")
+                        *escapes.entry(label.clone()).or_default() += 1;
+                        escape_ex.push(ex);
                     }
+                    outcome
                 }
             };
             *outcomes.entry(outcome).or_default() += 1;
@@ -465,6 +794,13 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
         let list: Vec<String> = escapes.iter().map(|(k, v)| format!("{k} {v}")).collect();
         let _ = writeln!(out, "    went to: {}", list.join(", "));
     }
+    if !another_file.is_empty() {
+        let list: Vec<String> = another_file
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect();
+        let _ = writeln!(out, "    on another file: {}", list.join(", "));
+    }
     let _ = writeln!(
         out,
         "\n  {:<10}  {:>5}  {:>6}  {:>5}",
@@ -492,9 +828,15 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
                 }
             }
         }
-        if !escape_ex.is_empty() {
-            let _ = writeln!(out, "\n  went another way");
-            for (t, ctx, err, next) in escape_ex.iter().take(o.examples) {
+        for (title, list) in [
+            ("went another way", &escape_ex),
+            ("another way on another file (not an escape)", &another_ex),
+        ] {
+            if list.is_empty() {
+                continue;
+            }
+            let _ = writeln!(out, "\n  {title}");
+            for (t, ctx, err, next) in list.iter().take(o.examples) {
                 let _ = writeln!(
                     out,
                     "    {}  {ctx}\n        {err}\n        => {next}",
@@ -510,7 +852,7 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
         "first_use": first_use.map(time::minute),
         "uses": uses, "failed": failed,
         "other_ways": {"total": alt_total, "before_first_use": alt_before, "kinds": other_kinds},
-        "after_failure": outcomes, "went_to": escapes,
+        "after_failure": outcomes, "went_to": escapes, "another_file": another_file,
         "days": days.iter().map(|(d, x)| json!({"day": d, "uses": x.uses, "failed": x.failed, "other": x.alt})).collect::<Vec<_>>(),
     });
     (out, j)
@@ -601,4 +943,77 @@ pub fn daily(log: &Log, w: &Window, o: &DailyOpts) -> (String, Value) {
         "total": o.patterns.iter().zip(&totals).map(|((n, _), v)| (n.clone(), json!(v))).collect::<serde_json::Map<_, _>>(),
     });
     (out, j)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    fn bash(cmd: &str, result: &str) -> Call {
+        Call {
+            ctx: 0,
+            ts: 0,
+            tool: "Bash".into(),
+            input: cmd.into(),
+            failed: true,
+            result: result.into(),
+        }
+    }
+
+    #[test]
+    fn words_end_with_the_command_and_keep_an_empty_quoted_word() {
+        assert_eq!(
+            words(" -i '' 's/a b/c/' \"d e.txt\" 2>&1 | head"),
+            s(&["-i", "", "s/a b/c/", "d e.txt"])
+        );
+        assert_eq!(words(" a \\\n  b; c"), s(&["a", "b"]));
+    }
+
+    #[test]
+    fn sed_perl_and_sd_name_the_files_they_change_in_place() {
+        assert_eq!(sed_files(&s(&["-i", "", "s/a/b/", "f"])), s(&["f"]));
+        assert_eq!(sed_files(&s(&["-i", "s/a/b/", "f", "g"])), s(&["f", "g"]));
+        assert_eq!(sed_files(&s(&["-i.bak", "-e", "s/a/b/", "f"])), s(&["f"]));
+        assert_eq!(sed_files(&s(&["-n", "1,5p", "f"])), s(&[]));
+        assert_eq!(
+            perl_files(&s(&["-0777", "-pi", "-e", "s/a/b/", "f"])),
+            s(&["f"])
+        );
+        assert_eq!(perl_files(&s(&["-pe", "s/a/b/", "f"])), s(&[]));
+        assert_eq!(sd_files(&s(&["-F", "a", "b", "f"])), s(&["f"]));
+        assert_eq!(sd_files(&s(&["a", "b"])), s(&[]));
+        assert_eq!(sd_files(&s(&["-p", "a", "b", "f"])), s(&[]));
+        assert_eq!(rpatch_files(&s(&["--diff", "--", "-f.rs"])), s(&["-f.rs"]));
+    }
+
+    #[test]
+    fn paths_are_compared_after_cd_and_by_the_end_of_a_full_path() {
+        let c = bash("cd /w && sed -i '' s/a/b/ ./src/../src/a.rs", "");
+        assert_eq!(written(&c, false), s(&["/w/src/a.rs"]));
+        assert!(same_path("src/a.rs", "/w/src/a.rs"));
+        assert!(!same_path("a.rs", "/w/ba.rs"));
+        assert!(!same_path("/v/src/a.rs", "/w/src/a.rs"));
+        assert_eq!(normal_path("/private/tmp/x", None), "/tmp/x");
+    }
+
+    #[test]
+    fn a_failed_rpatch_names_its_files_in_the_command_and_the_error() {
+        let c = bash(
+            "rpatch <<'EOF'\n=== a.rs\n=== ~/b.rs\nEOF",
+            "error: edits[0] c.rs (input line 2): \"old\" not found",
+        );
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(
+            written(&c, true),
+            s(&[&format!("{home}/b.rs"), "a.rs", "c.rs"])
+        );
+        // a python script that writes through a variable names the Path it was made from
+        let p = bash("python3 -c \"open(\\\"o.txt\\\", \\\"w\\\")\"", "");
+        assert_eq!(written(&p, false), s(&["o.txt"]));
+        assert_eq!(written(&bash("cat > \"$d/x\" <<'EOF'", ""), false), s(&[]));
+    }
 }

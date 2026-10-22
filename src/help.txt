@@ -152,6 +152,14 @@ What it counts (repeats, tool, daily):
   failure (Write makes new files all day; rewriting the failed file is an escape).
   --ignore RE: an --alt/--escape match that does not count (writing under /tmp).
   --since the day the tool arrived: before it, the other ways are not escapes.
+  rpatch: an escape is another way on a file the failed call was editing (`rpatch FILE`,
+  `=== FILE`, JSON "file", the file of `edits[N]`), read from the other way: Edit's and
+  Write's file_path, the files of sed -i, perl -i and sd, `cat > F`, `>| F`, python's
+  open(F, 'w') and Path(F).write_text. A relative path is under a leading `cd DIR`, and
+  matches the end of a full path. Another file is not an escape: `another way on another
+  file (not an escape)`, `on another file`. When the file of either call is not known (a
+  path in a variable, an rpatch with nothing in it), it counts as an escape as it did,
+  apart: `went another way, file not known`. Other tools do not compare files.
 
   daily: calls per local day whose input (the Bash command, the file path, or the tool
   input) or result matches each REGEX.

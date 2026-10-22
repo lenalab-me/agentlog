@@ -389,6 +389,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 alt_tools: Vec::new(),
                 escape_tools: Vec::new(),
                 ignore: None,
+                same_file: false,
             });
             if uses.is_some() {
                 spec.uses = uses;
