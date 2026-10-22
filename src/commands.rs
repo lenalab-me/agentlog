@@ -32,8 +32,13 @@ fn short_time(t: i64) -> String {
     time::minute(t)[5..].to_string()
 }
 
+/// A failure of the agent's: a call the user refused or stopped is not one.
+fn failed(c: &Call) -> bool {
+    c.failed && !sig::by_user(c)
+}
+
 fn header(log: &Log, w: &Window) -> String {
-    let failed = log.calls.iter().filter(|c| c.failed).count();
+    let failed = log.calls.iter().filter(|c| failed(c)).count();
     format!(
         "{} .. {} (local): {} calls, {} failed, in {} contexts (a subagent is its own context)\n",
         time::minute(w.since),
@@ -553,6 +558,10 @@ enum Ev<'a> {
 }
 
 fn classify<'a>(spec: &Spec, c: &'a Call) -> Option<Ev<'a>> {
+    // what the user refused or stopped did not run: neither a use nor another way
+    if c.failed && sig::by_user(c) {
+        return None;
+    }
     let used = match &spec.uses {
         Some(r) => c.tool == "Bash" && r.is_match(&c.input),
         None => c.tool == spec.name,
@@ -881,7 +890,7 @@ pub fn daily(log: &Log, w: &Window, o: &DailyOpts) -> (String, Value) {
     let mut table: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut totals = vec![0usize; o.patterns.len()];
     for c in &log.calls {
-        if o.tool.as_deref().is_some_and(|t| t != c.tool) || (o.failed_only && !c.failed) {
+        if o.tool.as_deref().is_some_and(|t| t != c.tool) || (o.failed_only && !failed(c)) {
             continue;
         }
         for (k, (_, r)) in o.patterns.iter().enumerate() {

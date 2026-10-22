@@ -172,7 +172,7 @@ fn repeats_counts_contexts_and_subagents_apart() {
 }
 
 #[test]
-fn what_the_user_refused_is_not_a_repeat() {
+fn what_the_user_refused_is_not_a_failure() {
     let d = tempfile::tempdir().unwrap();
     let no = "The user doesn't want to proceed with this tool use.";
     write_log(
@@ -180,9 +180,17 @@ fn what_the_user_refused_is_not_a_repeat() {
         &[
             tool("2026-10-05T01:00:00Z", "Edit", "/a", no, true),
             tool("2026-10-05T01:01:00Z", "Edit", "/b", no, true),
+            tool("2026-10-05T01:02:00Z", "Edit", "/c", "ok", false),
         ],
     );
     assert_eq!(json_of(d.path(), &["repeats"])["signatures"], json!([]));
+    let j = json_of(d.path(), &["tool", "Edit"]);
+    assert_eq!((j["uses"].clone(), j["failed"].clone()), (json!(1), json!(0)));
+    assert_eq!(j["after_failure"], json!({}));
+    let j = json_of(d.path(), &["daily", "x=.", "--failed"]);
+    assert_eq!(j["total"]["x"], 0);
+    let (_, text, _) = run(d.path(), &["repeats", "--since", "2026-10-01T00:00Z"]);
+    assert!(text.contains(": 3 calls, 0 failed,"), "{text}");
 }
 
 #[test]
