@@ -23,9 +23,9 @@ Examples:
   agentlog repeats --since 2026-10-01               same failure in two or more places
   agentlog tool rpatch --since 2026-10-01T00:00Z    did it fix itself, or go another way?
   agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
-  agentlog search 'too loose' -i --who user         what was said, oldest first
-  agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
-  agentlog timeline --repo ~/project/prod/x --since 2026-10-01   what was said and committed
+  agentlog search 'too slow' -i --who user         what was said, oldest first
+  agentlog show 1a2b3c4d --at '2026-09-14 10:05'    read around a hit (id and time as printed)
+  agentlog timeline --repo ~/src/x --since 2026-10-01   what was said and committed
   agentlog memory '関所' --type feedback            look something up in the memory files
   agentlog rules --repo . --json                    give this to a model: do any of them collide?
   agentlog unused --since 30d                       MCP, skills and CLIs installed, least used first

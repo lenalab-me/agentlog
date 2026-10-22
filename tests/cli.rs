@@ -428,7 +428,7 @@ fn bad_input_is_exit_2_and_no_log_directory_is_exit_3() {
 // ---------------------------------------------------------------------------------------
 // search and show: conversations are written by hand, with made-up words
 
-const CWD: &str = "/Users/tester/project/prod/net/designer";
+const CWD: &str = "/Users/tester/project/prod/shop/web";
 
 fn line(sid: &str, ts: &str, kind: &str, message: Value) -> Value {
     json!({"type": kind, "timestamp": ts, "sessionId": sid, "cwd": CWD, "message": message})
@@ -555,7 +555,7 @@ fn search_has_no_window_unless_asked_and_shows_local_time_ids_and_projects() {
     assert_eq!(all[0]["who"], "user");
     assert_eq!(all[0]["id"], "aaaaaaaa");
     assert_eq!(all[0]["session"], S1);
-    assert_eq!(all[0]["project"], "net/designer");
+    assert_eq!(all[0]["project"], "shop/web");
     assert_eq!(hits(d.path(), &["remark"]).len(), 1);
     let since = hits(d.path(), &["remark", "-i", "--since", "2026-10-01T00:00Z"]);
     assert_eq!(since.len(), 1);
@@ -565,7 +565,7 @@ fn search_has_no_window_unless_asked_and_shows_local_time_ids_and_projects() {
     assert_eq!(code, 0);
     let first = out.lines().next().unwrap();
     assert!(
-        first.contains("user") && first.contains("aaaaaaaa") && first.contains("net/designer"),
+        first.contains("user") && first.contains("aaaaaaaa") && first.contains("shop/web"),
         "{first}"
     );
     assert!(
@@ -680,7 +680,7 @@ fn show_prints_the_talk_with_tools_as_one_line_and_no_results() {
         !out.contains("RESULT") && !out.contains("second line"),
         "{out}"
     );
-    assert!(out.starts_with("# aaaaaaaa  claude  net/designer"), "{out}");
+    assert!(out.starts_with("# aaaaaaaa  claude  shop/web"), "{out}");
 }
 
 #[test]
@@ -855,7 +855,7 @@ fn snippets(h: &[Value]) -> Vec<&str> {
 }
 
 const CX1: &str = "019f0000-aaaa-7000-8000-00000000c001";
-const CX_CWD: &str = "/Users/tester/project/prod/net/designer";
+const CX_CWD: &str = "/Users/tester/project/prod/shop/web";
 const CX_DAY: &str = "sessions/2026/10/02";
 const CX_LOCAL: &str = "2026-10-02T14-00-00";
 
@@ -932,11 +932,11 @@ fn codex_search_reads_only_what_was_said() {
     assert_eq!(all[0]["source"], "codex");
     assert_eq!(all[0]["id"], "0000c001", "the last 8 characters");
     assert_eq!(all[0]["session"], CX1);
-    assert_eq!(all[0]["project"], "net/designer");
+    assert_eq!(all[0]["project"], "shop/web");
     assert_eq!(all[0]["timestamp"], "2026-10-02T05:02:00Z");
     assert_eq!(cx_hits(d.path(), &["ZEBRA", "--who", "assistant"]).len(), 1);
     assert_eq!(
-        cx_hits(d.path(), &["ZEBRA", "--project", "designer"]).len(),
+        cx_hits(d.path(), &["ZEBRA", "--project", "web"]).len(),
         4
     );
     assert_eq!(
@@ -957,7 +957,7 @@ fn codex_search_finds_what_the_log_writes_differently() {
         cx_msg(2, &t(2), "user", &["she said \"hello there\" twice"]),
         cx_msg(3, &t(3), "user", &["column\tseparated"]),
         cx_msg(4, &t(4), "user", &["Mixed CASE Word"]),
-        cx_msg(5, &t(5), "user", &["疎にしすぎると困る"]),
+        cx_msg(5, &t(5), "user", &["雨の日は遅れると困る"]),
         cx_msg(6, &t(6), "user", &["a\\b path"]),
     ];
     write_raw(&cx_file(d.path(), CX_DAY, CX_LOCAL, CX1), &lines);
@@ -970,7 +970,7 @@ fn codex_search_finds_what_the_log_writes_differently() {
     assert_eq!(n(&["mixed case", "-i"]), 1);
     assert_eq!(n(&["mixed case"]), 0);
     assert_eq!(n(&["(?i)mixed case"]), 1);
-    assert_eq!(n(&["疎にしすぎ"]), 1);
+    assert_eq!(n(&["雨の日は遅れ"]), 1);
     assert_eq!(n(&["nothing-like-this|Word"]), 1);
     assert_eq!(n(&[r"a\\b"]), 1);
     assert_eq!(n(&[r"\d+"]), 0);
@@ -1037,7 +1037,7 @@ fn a_codex_session_is_named_by_the_end_of_its_id_and_show_takes_any_part() {
     for spec in ["aaaa1111", "8000-0000aaaa", a] {
         let (code, out, err) = cx(d.path(), &["show", spec]);
         assert_eq!(code, 0, "{spec}: {err}");
-        assert!(out.starts_with("# aaaa1111  codex  net/designer"), "{out}");
+        assert!(out.starts_with("# aaaa1111  codex  shop/web"), "{out}");
         assert!(
             out.contains("a alpha talk") && !out.contains("beta"),
             "{out}"
@@ -1417,7 +1417,7 @@ fn story(v: &[Value]) -> Vec<String> {
 #[test]
 fn timeline_puts_the_talk_and_the_commits_in_one_order_by_time() {
     let d = tempfile::tempdir().unwrap();
-    let repo = init_repo(&d.path().join("proj/designer"));
+    let repo = init_repo(&d.path().join("proj/web"));
     let t = |h: u32, m: u32| format!("2026-10-05T{h:02}:{m:02}:00Z");
     commit(&repo, &t(10, 0), &t(10, 0), "first change");
     // Rebased the next day: the author time says when it was written, and decides the place.
@@ -1533,7 +1533,7 @@ fn timeline_puts_the_talk_and_the_commits_in_one_order_by_time() {
 #[test]
 fn timeline_takes_the_sessions_that_worked_in_the_repository_or_a_worktree_of_it() {
     let d = tempfile::tempdir().unwrap();
-    let repo = init_repo(&d.path().join("proj/designer"));
+    let repo = init_repo(&d.path().join("proj/web"));
     commit(
         &repo,
         "2026-10-05T10:00:00Z",
@@ -1542,7 +1542,7 @@ fn timeline_takes_the_sessions_that_worked_in_the_repository_or_a_worktree_of_it
     );
     let parent = repo.parent().unwrap().to_path_buf();
     let other = parent.join("other");
-    let lookalike = parent.join("designer-two");
+    let lookalike = parent.join("web-two");
     // A worktree git still lists, and one T3 Code made and deleted since.
     let live = d.path().join("elsewhere/live");
     git_in(
@@ -1553,7 +1553,7 @@ fn timeline_takes_the_sessions_that_worked_in_the_repository_or_a_worktree_of_it
     );
     let live = fs::canonicalize(&live).unwrap();
     let home = d.path().join("home");
-    let t3 = home.join(".t3/worktrees/designer/feature");
+    let t3 = home.join(".t3/worktrees/web/feature");
     let t3_of_another = home.join(".t3/worktrees/other-app/feature");
 
     let root = d.path().join("claude");

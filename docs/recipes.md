@@ -76,7 +76,7 @@ agentlog daily --since 14d sleep='(^|[\s;&(])sleep\s+\d' loop='until\s[^\n]*slee
 agentlog search '切り分けすぎ' --who user                 # 自分が何と言ったか（古い順、新しい50件）
 agentlog search 'デプロイ|deploy' -i --since 30d         # どちらの言い方でも。30 日に絞る
 agentlog search 'D3' --project web --who assistant
-agentlog show 1a2b3c4d --at '2026-10-02 14:25' --around 3   # 上で見つけた行の id と時刻
+agentlog show 1a2b3c4d --at '2026-09-14 10:05' --around 3   # 上で見つけた行の id と時刻
 agentlog show 1a2b3c4d --grep '切り分けすぎ' --around 5        # 時刻の代わりに、言葉で中心を決める
 ```
 
@@ -140,21 +140,21 @@ rm -rf ~/.cache/agentlog
 「何を言って、何がコミットされたか」を `git log` と記憶で突き合わせる代わりに、`timeline` で 1 本にする。
 
 ```sh
-agentlog timeline --repo ~/project/prod/x --since 2026-10-01 --until 2026-10-03   # 利用者の発言とコミット
-agentlog timeline --repo ~/project/prod/x --since 2026-10-02 --who any            # assistant の本文も
-agentlog show 1a2b3c4d --at '2026-10-02 14:25' --around 3                           # 気になる発言の前後を読む
-git -C ~/project/prod/x show 1a2b3c4                                                # コミットの中身
+agentlog timeline --repo ~/src/x --since 2026-10-01 --until 2026-10-03   # 利用者の発言とコミット
+agentlog timeline --repo ~/src/x --since 2026-10-02 --who any            # assistant の本文も
+agentlog show 1a2b3c4d --at '2026-09-14 10:05' --around 3                           # 気になる発言の前後を読む
+git -C ~/src/x show 1a2b3c4                                                # コミットの中身
 ```
 
 手順：
 
 1. **窓を区切る。** 引き継ぎなら前回の引き継ぎの日から、決定の記録ならその機能を始めた日から。`--since`・`--until` は日付か `14d`。窓の既定は 14 日。長いと行が多いので、1 週間ほどずつ読む。
 2. **発言とコミットの並びで、節目を探す。** 利用者の発言（方針、選択肢への返事、「それはやめよう」）のあとに、どんなコミットが続いたか。方針の変更は、発言の直後のコミットの件名に出る。コミットのない長い発言の連なりは、議論だけで終わった（実装されていない）決定。
-3. **決めた理由が要るところで `show`。** 行の id と時刻（`2026-10-02 14:25`）をそのまま `show` に渡すと、前後の会話が読める。assistant が出した選択肢と、それへの利用者の返事が、理由になる。
+3. **決めた理由が要るところで `show`。** 行の id と時刻（`2026-09-14 10:05`）をそのまま `show` に渡すと、前後の会話が読める。assistant が出した選択肢と、それへの利用者の返事が、理由になる。
 4. **コミットは `git show` で確かめる。** 件名が実際の変更を言っているかは、中身を見る。
 5. **書くときは、本物の発言と件名を写さない。** 日付と、自分の言葉での要約にする（ログから抜き出したものを公開するリポジトリに残さない、[harness-engineering](https://github.com/lenalab-me/harness-engineering) の決まり）。
 
-どのセッションが並ぶかは `--repo` から決まる：リポジトリの中（と、その作業ツリー、T3 Code が作って消した作業ツリー）で主に作業したセッション。`~/project/prod/shop` のような親のフォルダで開いたセッションも、作業が `shop/web` の側にあれば入る（親のフォルダにいた行は数えない）。別のリポジトリにまたがるセッションは、作業の半分以上がこちら側なら全部入る：その日に絞るか、`--project` で名前から選ぶ。リポジトリの外（スクラッチなど）でそのリポジトリの話をした会話は入らないので、`agentlog search` で足す。
+どのセッションが並ぶかは `--repo` から決まる：リポジトリの中（と、その作業ツリー、T3 Code が作って消した作業ツリー）で主に作業したセッション。`~/src/shop` のような親のフォルダで開いたセッションも、作業が `shop/web` の側にあれば入る（親のフォルダにいた行は数えない）。別のリポジトリにまたがるセッションは、作業の半分以上がこちら側なら全部入る：その日に絞るか、`--project` で名前から選ぶ。リポジトリの外（スクラッチなど）でそのリポジトリの話をした会話は入らないので、`agentlog search` で足す。
 
 見方：
 

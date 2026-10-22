@@ -230,8 +230,9 @@ pub fn note(name: &str, detail: &str) -> String {
 // ---------------------------------------------------------------------------------------
 // Reading
 
-/// `/Users/me/project/prod/network/designer` → `network/designer`: the session's first
-/// working directory, without the home directory and the usual `project/prod/`.
+/// `/Users/me/project/prod/shop/web` → `shop/web`: the session's first
+/// working directory, without the home directory and a leading `project/prod/` or
+/// `project/` (the author's layout; other paths are shown as they are).
 pub fn project_name(cwd: &str) -> String {
     project_name_in(cwd, &std::env::var("HOME").unwrap_or_default())
 }
@@ -619,10 +620,10 @@ mod tests {
     #[test]
     fn project_names_drop_home_and_project_prod() {
         assert_eq!(
-            project_name("/Users/me/project/prod/network/designer"),
-            "network/designer"
+            project_name("/Users/me/project/prod/shop/web"),
+            "shop/web"
         );
-        assert_eq!(project_name("/home/x/project/designer"), "designer");
+        assert_eq!(project_name("/home/x/project/web"), "web");
         assert_eq!(project_name("/Users/me"), "~");
         assert_eq!(project_name("/Users/me/.t3/scratch/a"), ".t3/scratch/a");
     }

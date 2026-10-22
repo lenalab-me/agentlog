@@ -117,7 +117,7 @@ fn is_under(path: &str, root: &str) -> bool {
 
 /// A session belongs to the repository when it worked there at least as much as anywhere
 /// else. Lines written in a directory above the repository (the folder the session was
-/// opened in, `~/project/prod/network` for `network/designer`) say where it started, not
+/// opened in, `~/src/shop` for `shop/web`) say where it started, not
 /// what it worked on, so they count for neither side.
 fn belongs(cwds: &HashMap<String, u32>, roots: &[String]) -> bool {
     let (mut inside, mut elsewhere) = (0u32, 0u32);
@@ -283,8 +283,8 @@ mod tests {
 
     fn roots() -> Vec<String> {
         vec![
-            "/h/p/net/designer".into(),
-            "/h/.t3/worktrees/designer".into(),
+            "/h/p/shop/web".into(),
+            "/h/.t3/worktrees/web".into(),
         ]
     }
 
@@ -300,29 +300,29 @@ mod tests {
     fn sessions_are_judged_by_where_they_worked() {
         let r = roots();
         // inside the repository, in a subfolder, in a worktree T3 made (deleted since)
-        assert!(belongs(&cwds(&[("/h/p/net/designer", 3)]), &r));
-        assert!(belongs(&cwds(&[("/h/p/net/designer/src", 3)]), &r));
-        assert!(belongs(&cwds(&[("/h/.t3/worktrees/designer/api", 3)]), &r));
+        assert!(belongs(&cwds(&[("/h/p/shop/web", 3)]), &r));
+        assert!(belongs(&cwds(&[("/h/p/shop/web/src", 3)]), &r));
+        assert!(belongs(&cwds(&[("/h/.t3/worktrees/web/api", 3)]), &r));
         // a sibling with the same name prefix is not the repository
-        assert!(!belongs(&cwds(&[("/h/p/net/designer-two", 9)]), &r));
+        assert!(!belongs(&cwds(&[("/h/p/shop/web-two", 9)]), &r));
         // opened in the parent folder: that alone says nothing, the work decides
-        assert!(!belongs(&cwds(&[("/h/p/net", 50)]), &r));
+        assert!(!belongs(&cwds(&[("/h/p/shop", 50)]), &r));
         assert!(belongs(
-            &cwds(&[("/h/p/net", 50), ("/h/p/net/designer", 2)]),
+            &cwds(&[("/h/p/shop", 50), ("/h/p/shop/web", 2)]),
             &r
         ));
         // worked in the sibling more than here
         assert!(!belongs(
             &cwds(&[
-                ("/h/p/net", 50),
-                ("/h/p/net/designer", 2),
-                ("/h/p/net/other", 5)
+                ("/h/p/shop", 50),
+                ("/h/p/shop/web", 2),
+                ("/h/p/shop/other", 5)
             ]),
             &r
         ));
         // half is enough
         assert!(belongs(
-            &cwds(&[("/h/p/net/designer", 5), ("/h/p/net/other", 5)]),
+            &cwds(&[("/h/p/shop/web", 5), ("/h/p/shop/other", 5)]),
             &r
         ));
         assert!(!belongs(&cwds(&[("/", 4), ("/tmp", 1)]), &r));

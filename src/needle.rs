@@ -246,14 +246,14 @@ mod tests {
 
     #[test]
     fn the_needle_is_what_every_match_must_contain() {
-        assert_eq!(lit("Planconfig", false).as_deref(), Some("Planconfig"));
+        assert_eq!(lit("migration", false).as_deref(), Some("migration"));
         assert_eq!(lit("foo.*barbaz", false).as_deref(), Some("barbaz"));
         assert_eq!(lit("colou?r check", false).as_deref(), Some("r check"));
         assert_eq!(lit("ab{0,2}cd", false).as_deref(), Some("cd"));
         assert_eq!(lit("abc+defg", false).as_deref(), Some("defg"));
         assert_eq!(lit(r"a\.b", false).as_deref(), Some("a.b"));
         assert_eq!(lit("(x|y)zzz", false).as_deref(), Some("zzz"));
-        assert_eq!(lit("疎にしすぎ", false).as_deref(), Some("疎にしすぎ"));
+        assert_eq!(lit("雨の日は遅れ", false).as_deref(), Some("雨の日は遅れ"));
         assert_eq!(lit("alpha|beta", false).as_deref(), Some("alpha|beta"));
         assert_eq!(lit("[ab]c", false).as_deref(), Some("c"));
     }
@@ -275,21 +275,21 @@ mod tests {
 
     #[test]
     fn folded_search_ignores_ascii_case_only() {
-        let p = Prefilter::new("Too Loose", true).unwrap();
-        assert!(p.may_match(b"{\"text\":\"it is TOO loose here\"}"));
+        let p = Prefilter::new("Too Slow", true).unwrap();
+        assert!(p.may_match(b"{\"text\":\"it is TOO slow here\"}"));
         assert!(!p.may_match(b"{\"text\":\"too tight\"}"));
-        let q = Prefilter::new("Too Loose", false).unwrap();
-        assert!(!q.may_match(b"too loose"));
-        assert!(q.may_match(b"Too Loose"));
+        let q = Prefilter::new("Too Slow", false).unwrap();
+        assert!(!q.may_match(b"too slow"));
+        assert!(q.may_match(b"Too Slow"));
     }
 
     #[test]
     fn a_non_ascii_needle_lets_escaped_lines_through() {
-        let p = Prefilter::new("疎", false).unwrap();
-        assert!(p.may_match("疎にしすぎ".as_bytes()));
-        assert!(p.may_match(b"\\u758e escaped"));
+        let p = Prefilter::new("雨", false).unwrap();
+        assert!(p.may_match("雨の日は遅れ".as_bytes()));
+        assert!(p.may_match(b"\\u96e8 escaped"));
         assert!(!p.may_match(b"plain"));
         let a = Prefilter::new("abc", false).unwrap();
-        assert!(!a.may_match(b"\\u758e escaped"));
+        assert!(!a.may_match(b"\\u96e8 escaped"));
     }
 }

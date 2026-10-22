@@ -43,7 +43,7 @@ pub fn default_roots() -> Vec<PathBuf> {
 // ---------------------------------------------------------------------------------------
 // Which files
 
-/// `rollout-2026-06-22T11-24-00-019eed24-4fae-7653-9a71-2b3b219b4dcd` → the session id.
+/// `rollout-2026-10-02T14-00-00-019f0000-aaaa-7000-8000-00000000c0de` → the session id.
 fn id_of(stem: &str) -> String {
     let n = stem.chars().count();
     if stem.starts_with("rollout-") && n >= 36 {
@@ -580,16 +580,16 @@ mod tests {
 
     #[test]
     fn ids_and_times_come_from_the_file_name() {
-        let stem = "rollout-2026-06-22T11-24-00-019eed24-4fae-7653-9a71-2b3b219b4dcd";
-        assert_eq!(id_of(stem), "019eed24-4fae-7653-9a71-2b3b219b4dcd");
-        assert_eq!(name_time(stem), time::parse_iso("2026-06-22T11:24:00Z"));
+        let stem = "rollout-2026-10-02T14-00-00-019f0000-aaaa-7000-8000-00000000c0de";
+        assert_eq!(id_of(stem), "019f0000-aaaa-7000-8000-00000000c0de");
+        assert_eq!(name_time(stem), time::parse_iso("2026-10-02T14:00:00Z"));
         assert_eq!(id_of("odd-name"), "odd-name");
         assert_eq!(name_time("odd-name"), None);
     }
 
     #[test]
     fn a_line_is_known_by_its_first_bytes() {
-        let m = br#"{"timestamp":"2026-06-22T02:24:13.083Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"user""#;
+        let m = br#"{"timestamp":"2026-10-02T05:00:13.083Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"user""#;
         assert!(kind(m) == Kind::Message);
         let c = br#"{"timestamp":"t","ordinal":3,"type":"response_item","payload":{"type":"function_call","name":"x""#;
         assert!(kind(c) == Kind::Call);

@@ -15,15 +15,15 @@ agentlog repeats --since 2026-10-01                 # 同じ失敗が 2 回以�
 agentlog tool rpatch --since 2026-10-01 -v          # 失敗のあと、次で直したか、別の手段に逃げたか
 agentlog tool devsrv --since 2026-10-01             # 使い始める前と後の、別のやり方の回数
 agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
-agentlog search 'too loose' -i --who user           # 前に何と言ったか（古い順。窓は既定で制限なし）
-agentlog show 1a2b3c4d --at '2026-10-02 14:25'      # search の行の id と時刻で、その前後の会話を読む
-agentlog search 'Planconfig' --source codex         # Codex のログだけ（--source claude|codex|all。既定は search が claude、show が all）
-agentlog timeline --repo ~/project/prod/x --since 2026-10-01 --until 2026-10-03   # 発言とコミットを時刻順に（振り返り・引き継ぎ）
+agentlog search 'too slow' -i --who user           # 前に何と言ったか（古い順。窓は既定で制限なし）
+agentlog show 1a2b3c4d --at '2026-09-14 10:05'      # search の行の id と時刻で、その前後の会話を読む
+agentlog search 'migration' --source codex         # Codex のログだけ（--source claude|codex|all。既定は search が claude、show が all）
+agentlog timeline --repo ~/src/x --since 2026-10-01 --until 2026-10-03   # 発言とコミットを時刻順に（振り返り・引き継ぎ）
 agentlog memory '関所' --type feedback              # メモリのファイルから探す（必要なときに引く。毎回読むものではない）
 agentlog rules --repo . --count                     # この場所で始めたセッションが読む禁止ルールの本数（--json をモデルに渡して、ぶつかりを読ませる。置き場所の列と、同じ名前のメモリが別のプロジェクトにある印つき）
 agentlog unused --since 30d                         # 入れてある MCP・スキル・案内している CLI と、窓の中の使用回数（0 回が上。どこを読んだかも出す）
 # 別の場所に写したログは、--root（Claude）と --codex-root（Codex。sessions と archived_sessions の2か所）で渡す
-agentlog search 'Planconfig' --raw                  # 控え（~/.cache/agentlog）を使わず、ログを直接読む（遅いが確実。控えが怪しいときの突き合わせ）
+agentlog search 'migration' --raw                  # 控え（~/.cache/agentlog）を使わず、ログを直接読む（遅いが確実。控えが怪しいときの突き合わせ）
 ```
 
 使い方の要約は `agentlog --help`（40 行以内。`head -40` で切られても要約は全部届く）。コマンドごとの詳しい説明は `agentlog help COMMAND`（`agentlog COMMAND --help` も同じ。`codex`・`cache` の節も引ける）、全文は `agentlog help all`。Claude Code の中から呼ぶと、そのセッション自身は数えない（`--include-self` で入れる）。
