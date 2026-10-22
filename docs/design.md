@@ -149,7 +149,7 @@ rpatch（プリセットの `same_file`）は、失敗した呼び出しが編�
 
 | ファイル | 役目 |
 |---|---|
-| `main.rs` | 引数を読み、ログを読み、8 つ（`repeats`・`tool`・`daily`・`search`・`show`・`timeline`・`memory`・`rules`）のうち 1 つを呼んで出す。`search`・`show`・`timeline` は Claude と Codex の両方を読んで 1 つの一覧にする |
+| `main.rs` | 引数を読み、ログを読み、9 つ（`repeats`・`tool`・`daily`・`search`・`show`・`timeline`・`memory`・`rules`・`unused`）のうち 1 つを呼んで出す。`search`・`show`・`timeline` は Claude と Codex の両方を読んで 1 つの一覧にする |
 | `cli.rs` | 引数。オプションはサブコマンドの後のどこに置いてもよい。実行中のセッションを外す |
 | `load.rs` | ファイルを集め（`all_files`・`select_from`・`select_files`）、スレッドで並べて読み（`read_all`）、呼び出しにする |
 | `sig.rs` | プログラム、エラー行、ならし、シグネチャ、ユーザーが断ったか |
@@ -165,6 +165,7 @@ rpatch（プリセットの `same_file`）は、失敗した呼び出しが編�
 | `timeline.rs` | `timeline`：`git log` と `git worktree list` を呼び、セッションがリポジトリのものかを `cwd` で決め、発言とコミットを時刻順に並べて出す |
 | `memory.rs` | `memory`：メモリのファイル（Claude Code の `~/.claude/projects/<フォルダ>/memory/`、Codex の `~/.codex/memories/`）を探して読み（frontmatter・コードブロックの区別、実体のパスでの重複除き、プロジェクト名）、正規表現で探して出す。`rules` も同じ読み方を使う |
 | `rules.rs` | `rules`：メモリと指示ファイルから禁止の行を拾い、ファイルごとの本数と行の一覧を出す。禁止の判定の正規表現（`DEFAULT_PATTERN`）はここに 1 か所 |
+| `unused.rs` | `unused`：入れてあるもの（MCP サーバー・スキル・CLAUDE.md の「CLI tools」で案内しているコマンド）を設定のファイルから集め、ログのツール呼び出しで使用回数と最後に使った日を数えて並べる。読んだ場所と読めなかった場所も出す |
 | `time.rs` | ISO 8601 の読み書き、地方時の日付、`14d` のような相対の指定 |
 
 依存は `serde_json`、`regex-lite`、`libc`（地方時の差）、`memchr`（行の分割と文字列探し。`serde_json` がすでに使っている）だけ。行に `"tool_use` も `"tool_result` も含まれなければ JSON として読まずに飛ばす。
@@ -317,6 +318,41 @@ $ agentlog timeline --repo ~/project/prod/app --since 2026-10-02 --until 2026-10
 - **終了コード.** `--repo` がディレクトリでなければ 2、`--pattern` が正規表現でなければ 2、メモリのフォルダが読めなければ 3。
 
 **限り.** 判定は行単位で、前後の文脈は見ない（「〜しないほうがよい」「〜しないでよい」も当たる）。Claude のプロジェクトのフォルダは作業ツリーごとに別なので、`--repo` は渡した場所のフォルダだけを見て、作業ツリーや親のフォルダで開いたセッションのメモリは入らない。`DIR/.claude/` の下の指示や、`@` で取り込まれるファイルは読まない。
+
+### unused
+
+入れてあるものを、ログの中の使用回数と並べる。ランタイムやモデルが大きく変わったときの見直しで「何を外せるか」の材料を出すためのもの。**回数を並べるだけで、外す判断はしない**（0 回でも、年に 1 度の作業に要るものはある）。控えは使わない（ツール呼び出しは控えに入っていない。`repeats` と同じく、ログを直接読む）。`build.rs` の「読み方」には数えない。
+
+**入れてあるもの（読む場所）.** 設定はいくつものファイルに散っているので、読んだ場所ごとに「何が見つかったか」を出し、読めない場所（ない、JSON でない）は飛ばして、そう出す。
+
+| 種類 | 場所 | 何を読むか |
+|---|---|---|
+| mcp | `~/.claude.json` | `mcpServers`（全体）、`projects.<パス>.mcpServers`（プロジェクトごと）、`claudeAiMcpEverConnected`（claude.ai のコネクタ。手元に残るのは「つないだことがある」の記録だけ） |
+| mcp・skill | `~/.claude/plugins/installed_plugins.json` | プラグインごとの `installPath` の下の `.mcp.json` と `.claude-plugin/plugin.json` の `mcpServers`、`skills/*/SKILL.md` |
+| — | `~/.claude/settings.json` | `enabledPlugins` で `false` のプラグインを外す |
+| skill | `~/.claude/skills/*/SKILL.md` | frontmatter の `name`（なければフォルダ名） |
+| cli | `~/.claude/CLAUDE.md` | 「CLI tools」の見出しの節（次の同じか上の階層の見出しまで） |
+
+同じ名前のものが複数の場所にあれば 1 行にまとめ、`from` に場所を並べる。読まないもの：プロジェクトの `.mcp.json` と `.claude/skills`、`~/.claude/commands`、アプリが持ち込むスキル、Codex の設定。
+
+**CLI の名前の拾い方.** 節の中のコードスパン（バッククォート）の最初の語を候補にし、次を外す。
+
+- 項目の見出し（括弧の外の最初のコロンより前）の中のもの。「重いコマンド（`make test` など）は別の機械で：`farm run …`」の `make` は使いどころの例で、案内している道具ではない。
+- 同じ文の「instead of」より後のもの（使わないでほしいもの）。
+- 語の多いスパンのすぐ後に `, ` で続くもの（`srv logs`, `ls`, `stop` の `ls`・`stop` はサブコマンド）。
+- 名前でないもの（`--json`、`~/x`、`<<<`）と、`PATH` に実行できるファイルがないもの（`(or `all`)` の `all` など。外したものは読んだ場所の行に出す）。
+
+経験則なので、書き方が変わると拾い漏れや拾いすぎが出る。読んだ場所の行に出る本数と「外したもの」で確かめる。
+
+**使った回数.** 窓は呼び出しごとの時刻（ファイルの更新時刻はファイルを読まないためだけ）。サブエージェントのファイルも数える。
+
+- MCP サーバー：ツール呼び出しの名前 `mcp__SERVER__tool` の SERVER。Claude Code はサーバー名の英数字・`_`・`-` 以外を `_` にして名前を作るので、設定の名前を同じ規則で直して突き合わせる（`claude.ai Some Drive` → `claude_ai_Some_Drive`）。プラグインのサーバーは `plugin_PLUGIN_SERVER`。
+- スキル：`Skill` の呼び出しの `skill`、と利用者が打った `/NAME`（ログでは `<command-name>/NAME</command-name>`）。プラグインのスキルは `PLUGIN:NAME`。
+- CLI：Bash のコマンドを空白と `; & | ( ) < >` とバッククォートで区切った語に、その名前がそのまま現れたもの。1 回の呼び出しで何度出ても 1 回。引数（`brew install x`）も数えるので多めに出るが、外す判断の側には倒れない（使っているものを 0 と出さない）。引用符の中、パス（`./x`）、ヒアドキュメントの本文（パッチやファイルの中身）は数えない。
+
+**出力.** 窓と呼び出しの数、読んだ場所と見つかったもの、読めなかった場所、続けて表（種類・名前・回数・最後に使った日・どこに入っているか）。回数の少ない順、同じなら mcp・skill・cli の順、名前の順。`--json` は 1 つのオブジェクト（`read` と `items`）。終了コードは、ログのフォルダが読めなければ 3、設定が読めないのはエラーにしない。
+
+**限り.** Claude Code のログだけ（Codex の設定とログは読まない）。claude.ai のコネクタは「つないだことがある」ものしか手元に残らず、今つながっているかは分からない。プロジェクトごとに切ったサーバー（`disabledMcpServers`）も入れてあるものとして出す。スキルが `Skill` を通らずに読まれた場合（本文を直接読んだなど）は数えない。
 
 ### 控え（`~/.cache/agentlog/`）
 
