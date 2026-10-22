@@ -445,3 +445,19 @@ fn a_copied_history_counts_once_and_a_cut_line_does_not_hide_a_file() {
         assert_eq!(uses(&after, &kind, &name), n + more, "{kind} {name}");
     }
 }
+
+#[test]
+fn project_keeps_the_sessions_of_that_project() {
+    let w = world();
+    let mut a = vec!["unused", "--json", "--project", "work-x"];
+    a.extend(WINDOW);
+    let (code, out, err) = agentlog(&w, &a);
+    assert_eq!(code, 0, "{err}");
+    let kept: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(rows(&kept), rows(&report(&w)));
+    let mut a = vec!["unused", "--json", "--project", "elsewhere"];
+    a.extend(WINDOW);
+    let (_, out, _) = agentlog(&w, &a);
+    let none: Value = serde_json::from_str(&out).unwrap();
+    assert!(rows(&none).iter().all(|r| r.2 == 0), "{none:#}");
+}

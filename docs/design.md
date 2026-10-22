@@ -193,7 +193,7 @@ rpatch（プリセットの `same_file`）は、失敗した呼び出しが編�
 
 **セッションの id.** 先頭 8 文字。サブエージェントは `親の8文字/エージェントの8文字`（`show` にそのまま渡せる）。親のセッションは、ファイルが `<session>.jsonl` ならその名前、サブエージェントは `<session>/subagents/agent-X.jsonl` の `<session>`、古い形で同じディレクトリに `agent-X.jsonl` があるときは、行の中の `sessionId`。
 
-**プロジェクト名.** フォルダ名（`-Users-me-project-prod-shop-web`）は、ハイフンが区切りか名前の一部か分からないので、読みやすくできない。ssh で入ったセッションのフォルダ（`ssh-<id>`）には、パスがまったく出ない。そこで、**セッションで最初に出る `cwd`**（開始したディレクトリ）から作る。ホーム（`/Users/<名前>/`、`/home/<名前>/`）と、先頭の `project/prod/`（なければ `project/`）を落とす。`/Users/me/project/prod/shop/web` は `shop/web`、`~/.t3/worktrees/x/y` は `.t3/worktrees/x/y`、ssh 先の `/home/u/project/designer` は `designer`、ホームそのものは `~`。`cwd` がなければフォルダ名を従来どおり短くしたもの。`--project S` は、フォルダ名か、この表示名のどちらかに S が含まれればよい（ssh のセッションを名前で拾えるように、読んだあとで判定する）。
+**プロジェクト名.** フォルダ名（`-Users-me-project-prod-shop-web`）は、ハイフンが区切りか名前の一部か分からないので、読みやすくできない。ssh で入ったセッションのフォルダ（`ssh-<id>`）には、パスがまったく出ない。そこで、**セッションで最初に出る `cwd`**（開始したディレクトリ）から作る。ホーム（`/Users/<名前>/`、`/home/<名前>/`）と、先頭の `project/prod/`（なければ `project/`）を落とす。`/Users/me/project/prod/shop/web` は `shop/web`、`~/.t3/worktrees/x/y` は `.t3/worktrees/x/y`、ssh 先の `/home/u/project/designer` は `designer`、ホームそのものは `~`。`cwd` がなければフォルダ名を従来どおり短くしたもの。`--project S` は、フォルダ名か、この表示名のどちらかに S が含まれればよい（ssh のセッションを名前で拾えるように、読んだあとで判定する）。repeats・tool・daily・unused も同じ（ファイルの最初の `cwd` から表示名を作る）。search に出た名前で絞れる。
 
 **search.** 発言ごとに最初の一致を 1 行にする（時刻は地方時の分まで、`who`、`source`、id、プロジェクト、一致箇所の前後 40 文字ずつ。改行は空白）。古い順。`--limit`（既定 50）を超えたら**新しい方を残して**、全件数と切った数を出す（振り返りで欲しいのは最近の方が多いため。古い方は `--since`・`--until` で絞って見る）。`--json` は 1 件 1 オブジェクトで 1 行ずつ、切ったことの知らせは標準エラーに出す。0 件でも終了コードは 0。窓の既定は**制限なし**（`--since 14d` ではない。古い会話を探すため）。
 

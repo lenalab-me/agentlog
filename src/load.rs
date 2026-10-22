@@ -20,7 +20,7 @@ use std::time::UNIX_EPOCH;
 use memchr::memmem;
 use serde_json::Value;
 
-use crate::{jsonl, lines, time};
+use crate::{jsonl, lines, talk, time};
 
 /// Longest command or result kept per call. Enough for signatures and examples.
 const KEEP: usize = 4000;
@@ -188,12 +188,13 @@ fn sidechain(v: &Value) -> Option<String> {
 
 /// The calls of one log file. A line that is not JSON is passed over, and so is a last line
 /// with no newline (still being written), as `search` does.
-fn read_file(path: &Path, f: &Filter) -> io::Result<Vec<Read>> {
+fn read_file(path: &Path, f: &Filter) -> io::Result<(Vec<Read>, Option<String>)> {
     let agent_file = path
         .file_name()
         .is_some_and(|n| n.to_string_lossy().starts_with("agent-"));
     let mut calls: Vec<Read> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
+    let mut cwd: Option<String> = None;
     lines::scan_from(
         path,
         0,
@@ -206,10 +207,35 @@ fn read_file(path: &Path, f: &Filter) -> io::Result<Vec<Read>> {
                 return;
             }
             let Some(v) = jsonl::parse(line) else { return };
+            if cwd.is_none() {
+                cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
+            }
             read_line(&v, f, agent_file, &mut calls, &mut by_id);
         },
     )?;
-    Ok(calls)
+    Ok((calls, cwd))
+}
+
+/// Whether `--project` keeps a log file: its folder (`-Users-me-project-x`) or the name
+/// `search` shows for its working directory (`x`) holds one of the names, so that the
+/// name `search` printed picks the same sessions here.
+pub fn project_wanted(root: &Path, path: &Path, cwd: Option<&str>, projects: &[String]) -> bool {
+    let folder = folder_of(root, path);
+    let shown = cwd.map(talk::project_name);
+    projects.is_empty()
+        || projects.iter().any(|p| {
+            folder.contains(p.as_str()) || shown.as_ref().is_some_and(|s| s.contains(p.as_str()))
+        })
+}
+
+/// The filter without `--project`: which project a file is for is known once it is read.
+pub fn any_project(f: &Filter) -> Filter {
+    Filter {
+        since: f.since,
+        until: f.until,
+        projects: Vec::new(),
+        excludes: f.excludes.clone(),
+    }
 }
 
 fn read_line(
@@ -337,9 +363,13 @@ pub fn read_all<T: Send>(
 }
 
 pub fn load(root: &Path, f: &Filter) -> io::Result<Log> {
-    let files = select_files(root, f)?;
+    let files = select_files(root, &any_project(f))?;
     // An unreadable file is skipped, not fatal.
-    let results = read_all(&files, |p| read_file(p, f).ok().filter(|c| !c.is_empty()));
+    let results = read_all(&files, |p| {
+        let (calls, cwd) = read_file(p, f).ok()?;
+        let keep = !calls.is_empty() && project_wanted(root, p, cwd.as_deref(), &f.projects);
+        keep.then_some(calls)
+    });
     let mut log = Log {
         ctxs: Vec::new(),
         calls: Vec::new(),

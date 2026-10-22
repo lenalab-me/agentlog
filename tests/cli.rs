@@ -2018,3 +2018,19 @@ fn a_local_time_near_a_change_of_daylight_saving_time_is_that_time() {
         assert_eq!(j["since"], local, "{when}");
     }
 }
+
+#[test]
+fn project_takes_the_name_search_shows_in_every_report() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("-Users-tester-work-shop-web");
+    fs::create_dir_all(&p).unwrap();
+    let cwd = json!({"cwd": "/Users/tester/work/shop/web"});
+    let call = failed_call("toolu_h", "2026-10-05T01:00:00Z", BOOM, cwd);
+    fs::write(p.join("s1.jsonl"), call).unwrap();
+    for (name, n) in [("work/shop/web", 1), ("shop-web", 1), ("shop/api", 0)] {
+        let j = json_of(d.path(), &["repeats", "--project", name]);
+        assert_eq!(j["calls"], n, "{name}");
+        let j = json_of(d.path(), &["daily", "x=.", "--project", name]);
+        assert_eq!(j["total"]["x"], n, "{name}");
+    }
+}

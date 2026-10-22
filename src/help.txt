@@ -160,7 +160,8 @@ What it counts (repeats, tool, daily):
   and timeline show the copied words once). A line that is not JSON is passed over; half
   of a UTF-16 pair (an emoji cut short) reads as U+FFFD. A call the user refused or
   stopped is not a failure: not in "N failed", repeats or daily --failed, and tool
-  leaves it out (it did not run).
+  leaves it out (it did not run). --project S keeps a session whose folder or shown name
+  (its working directory, as search prints it) holds S, in these reports as in search.
 
   repeats: failed calls grouped by signature: the tool, for Bash the program, and the
   first error line with paths, ids and numbers flattened (a call refused before it ran,

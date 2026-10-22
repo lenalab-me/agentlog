@@ -623,14 +623,13 @@ struct Hit {
     ts: i64,
 }
 
-/// The tool calls (their ids) and the uses in one log file. Read as `load` reads: a line
-/// that is not JSON is passed over, and so is a last line still being written.
-fn read_file(
-    path: &Path,
-    f: &Filter,
-    clis: &BTreeSet<&str>,
-) -> io::Result<(Vec<Option<String>>, Vec<Hit>)> {
-    let (mut calls, mut hits) = (Vec::new(), Vec::new());
+/// The tool calls (their ids) and the uses in one log file, and its first working directory.
+type FileUse = (Vec<Option<String>>, Vec<Hit>, Option<String>);
+
+/// What one log file used. Read as `load` reads: a line that is not JSON is passed over,
+/// and so is a last line still being written.
+fn read_file(path: &Path, f: &Filter, clis: &BTreeSet<&str>) -> io::Result<FileUse> {
+    let (mut calls, mut hits, mut cwd) = (Vec::new(), Vec::new(), None);
     lines::scan_from(
         path,
         0,
@@ -642,11 +641,14 @@ fn read_file(
                 return;
             }
             if let Some(v) = jsonl::parse(line) {
+                if cwd.is_none() {
+                    cwd = v.get("cwd").and_then(Value::as_str).map(str::to_string);
+                }
                 read_line(&v, f, clis, typed, &mut calls, &mut hits);
             }
         },
     )?;
-    Ok((calls, hits))
+    Ok((calls, hits, cwd))
 }
 
 fn read_line(
@@ -712,9 +714,11 @@ fn read_line(
 }
 
 fn usage(root: &Path, f: &Filter, clis: &BTreeSet<&str>) -> io::Result<(Usage, usize)> {
-    let files = load::select_files(root, f)?;
+    let files = load::select_files(root, &load::any_project(f))?;
     let results = load::read_all(&files, |p| {
-        read_file(p, f, clis).ok().filter(|(c, _)| !c.is_empty())
+        let (calls, hits, cwd) = read_file(p, f, clis).ok()?;
+        let keep = !calls.is_empty() && load::project_wanted(root, p, cwd.as_deref(), &f.projects);
+        keep.then_some((calls, hits))
     });
     let mut all = Usage::default();
     let mut contexts = 0;
