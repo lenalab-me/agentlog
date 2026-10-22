@@ -18,6 +18,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 
 use crate::cache::{self, Cache, Extract, Need, Slot};
+use crate::jsonl;
 use crate::lines;
 use crate::load::{self, Filter};
 use crate::needle::Prefilter;
@@ -347,7 +348,7 @@ fn codex_line(n: usize, line: &[u8], pre: Option<&Prefilter>, ex: &mut Extract) 
         return;
     }
     // A line that is not JSON (half written, damaged) is passed over.
-    let Ok(v) = serde_json::from_slice::<Value>(line) else {
+    let Some(v) = jsonl::parse(line) else {
         return;
     };
     if v.get("ordinal")
@@ -404,7 +405,7 @@ fn codex_line(n: usize, line: &[u8], pre: Option<&Prefilter>, ex: &mut Extract) 
 }
 
 fn meta(line: &[u8], ex: &mut Extract) {
-    let Ok(v) = serde_json::from_slice::<Value>(line) else {
+    let Some(v) = jsonl::parse(line) else {
         return;
     };
     let Some(p) = v.get("payload") else { return };

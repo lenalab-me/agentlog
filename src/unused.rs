@@ -5,16 +5,16 @@
 //! The settings are spread over several files, so every place read is reported, and a place
 //! that cannot be read is skipped and named.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::load::{self, Filter};
-use crate::time;
+use crate::{jsonl, lines, time};
 
 pub struct UnusedOpts {
     pub home: PathBuf,
@@ -613,76 +613,124 @@ fn text_of(content: &Value) -> String {
     }
 }
 
-fn read_file(path: &Path, f: &Filter, clis: &BTreeSet<&str>) -> io::Result<Usage> {
-    let mut u = Usage::default();
-    for line in BufReader::new(fs::File::open(path)?).lines() {
-        let line = line?;
-        let call = line.contains("\"tool_use\"");
-        let typed = line.contains("<command-name>");
-        if !call && !typed {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let Some(ts) = v
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(time::parse_iso)
-        else {
-            continue;
-        };
-        if ts < f.since || ts >= f.until {
-            continue;
-        }
-        let content = v.pointer("/message/content").unwrap_or(&Value::Null);
-        if typed && v.get("type").and_then(Value::as_str) == Some("user") {
-            for name in typed_commands(&text_of(content)) {
-                u.hit(Kind::Skill, name, ts);
+/// One use found in a file: what was used, when, and what it was found in (the tool_use id,
+/// or the line's uuid for a typed `/NAME`), so that a copy of it in another file is not
+/// counted again.
+struct Hit {
+    from: Option<String>,
+    kind: Kind,
+    name: String,
+    ts: i64,
+}
+
+/// The tool calls (their ids) and the uses in one log file. Read as `load` reads: a line
+/// that is not JSON is passed over, and so is a last line still being written.
+fn read_file(
+    path: &Path,
+    f: &Filter,
+    clis: &BTreeSet<&str>,
+) -> io::Result<(Vec<Option<String>>, Vec<Hit>)> {
+    let (mut calls, mut hits) = (Vec::new(), Vec::new());
+    lines::scan_from(
+        path,
+        0,
+        |_, _| true,
+        |_, line| {
+            let call = memchr::memmem::find(line, b"\"tool_use\"").is_some();
+            let typed = memchr::memmem::find(line, b"<command-name>").is_some();
+            if !call && !typed {
+                return;
             }
-        }
-        for b in content.as_array().into_iter().flatten() {
-            if b.get("type").and_then(Value::as_str) != Some("tool_use") {
-                continue;
+            if let Some(v) = jsonl::parse(line) {
+                read_line(&v, f, clis, typed, &mut calls, &mut hits);
             }
-            u.calls += 1;
-            let tool = b.get("name").and_then(Value::as_str).unwrap_or("");
-            let input = b.get("input").unwrap_or(&Value::Null);
-            if let Some(rest) = tool.strip_prefix("mcp__") {
-                let server = rest.split("__").next().unwrap_or(rest);
-                u.hit(Kind::Mcp, server, ts);
-            } else if tool == "Skill" {
-                if let Some(s) = input.get("skill").and_then(Value::as_str) {
-                    u.hit(Kind::Skill, s.trim_start_matches('/'), ts);
-                }
-            } else if tool == "Bash"
-                && let Some(cmd) = input.get("command").and_then(Value::as_str)
-            {
-                let cmd = without_heredocs(cmd);
-                let seen: BTreeSet<&str> = words(&cmd).filter(|w| clis.contains(w)).collect();
-                for w in seen {
-                    u.hit(Kind::Cli, w, ts);
-                }
+        },
+    )?;
+    Ok((calls, hits))
+}
+
+fn read_line(
+    v: &Value,
+    f: &Filter,
+    clis: &BTreeSet<&str>,
+    typed: bool,
+    calls: &mut Vec<Option<String>>,
+    hits: &mut Vec<Hit>,
+) {
+    let Some(ts) = v
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(time::parse_iso)
+    else {
+        return;
+    };
+    if ts < f.since || ts >= f.until {
+        return;
+    }
+    let mut hit = |from: Option<String>, kind: Kind, name: &str| {
+        hits.push(Hit {
+            from,
+            kind,
+            name: name.to_string(),
+            ts,
+        })
+    };
+    let content = v.pointer("/message/content").unwrap_or(&Value::Null);
+    if typed && v.get("type").and_then(Value::as_str) == Some("user") {
+        // a copied line has the same uuid; without one, the same time and name
+        let uuid = v.get("uuid").and_then(Value::as_str);
+        for name in typed_commands(&text_of(content)) {
+            let from = uuid.map_or_else(|| format!("typed {ts} {name}"), str::to_string);
+            hit(Some(from), Kind::Skill, name);
+        }
+    }
+    for b in content.as_array().into_iter().flatten() {
+        if b.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        let id = b.get("id").and_then(Value::as_str).map(str::to_string);
+        calls.push(id.clone());
+        let tool = b.get("name").and_then(Value::as_str).unwrap_or("");
+        let input = b.get("input").unwrap_or(&Value::Null);
+        if let Some(rest) = tool.strip_prefix("mcp__") {
+            let server = rest.split("__").next().unwrap_or(rest);
+            hit(id.clone(), Kind::Mcp, server);
+        } else if tool == "Skill" {
+            if let Some(s) = input.get("skill").and_then(Value::as_str) {
+                hit(id.clone(), Kind::Skill, s.trim_start_matches('/'));
+            }
+        } else if tool == "Bash"
+            && let Some(cmd) = input.get("command").and_then(Value::as_str)
+        {
+            let cmd = without_heredocs(cmd);
+            let seen: BTreeSet<&str> = words(&cmd).filter(|w| clis.contains(w)).collect();
+            for w in seen {
+                hit(id.clone(), Kind::Cli, w);
             }
         }
     }
-    Ok(u)
 }
 
 fn usage(root: &Path, f: &Filter, clis: &BTreeSet<&str>) -> io::Result<(Usage, usize)> {
     let files = load::select_files(root, f)?;
     let results = load::read_all(&files, |p| {
-        read_file(p, f, clis).ok().filter(|u| u.calls > 0)
+        read_file(p, f, clis).ok().filter(|(c, _)| !c.is_empty())
     });
     let mut all = Usage::default();
-    let contexts = results.len();
-    for (_, u) in results {
-        all.calls += u.calls;
-        for (k, (n, last)) in u.used {
-            let e = all.used.entry(k).or_default();
-            e.0 += n;
-            e.1 = e.1.max(last);
+    let mut contexts = 0;
+    // A session can start with a copy of another's history: what an earlier file had
+    // (the same tool_use id, the same typed line) is not counted again.
+    let mut seen: HashSet<String> = HashSet::new();
+    for (_, (calls, hits)) in results {
+        let new = |from: &Option<String>| from.as_ref().is_none_or(|k| !seen.contains(k));
+        let n = calls.iter().filter(|id| new(id)).count();
+        for h in hits.iter().filter(|h| new(&h.from)) {
+            all.hit(h.kind, &h.name, h.ts);
         }
+        all.calls += n;
+        contexts += usize::from(n > 0);
+        seen.extend(calls.into_iter().flatten());
+        seen.extend(hits.into_iter().filter_map(|h| h.from));
     }
     Ok((all, contexts))
 }

@@ -6,8 +6,9 @@
 //! output of local commands); `human_text` is the one place that tells them apart.
 //! Thinking blocks, tool inputs and tool results are not conversation and are left out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -17,12 +18,13 @@ use regex_lite::Regex;
 use serde_json::Value;
 
 use crate::cache::{self, Cache, Extract, Need, Slot};
+use crate::jsonl;
 use crate::lines;
 use crate::load::{self, Filter, short_project};
 use crate::needle::Prefilter;
 use crate::time;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Who {
     User,
     Assistant,
@@ -323,7 +325,7 @@ fn claude_line(line: &[u8], agent_file: bool, tools: bool, ex: &mut Extract) {
     if has(line, b"\"type\":\"tool_result\"") && !has(line, b"\"type\":\"text\"") {
         return;
     }
-    let Ok(v) = serde_json::from_slice::<Value>(line) else {
+    let Some(v) = jsonl::parse(line) else {
         return;
     };
     let kind = str_field(&v, "type");
@@ -477,12 +479,33 @@ pub fn load_sessions(
     }
     let files = load::select_from(root, &all, &wide);
     let read = load::read_all(&files, |p| {
-        let s = read_session(root, p, &wide, need, pre, slot.as_ref()).ok()?;
-        let keep =
-            !s.events.is_empty() && project_matches(&s, &load::folder_of(root, p), &f.projects);
-        keep.then_some(s)
+        read_session(root, p, &wide, need, pre, slot.as_ref()).ok()
     });
-    Ok(read.into_iter().map(|(_, s)| s).collect())
+    let mut seen = HashSet::new();
+    Ok(read
+        .into_iter()
+        .filter_map(|(i, mut s)| {
+            once(&mut s, &mut seen);
+            let keep = !s.events.is_empty()
+                && project_matches(&s, &load::folder_of(root, &files[i]), &f.projects);
+            keep.then_some(s)
+        })
+        .collect())
+}
+
+/// Leaves out what an earlier session already had: a session can start with a copy of
+/// another's history, the same lines at the same times. Sessions come in file order, so the
+/// first file that has a line keeps it; within one session nothing is left out.
+fn once(s: &mut Session, seen: &mut HashSet<(Option<Who>, i64, u64)>) {
+    let key = |e: &Event| {
+        let mut h = DefaultHasher::new();
+        e.text.hash(&mut h);
+        (e.who, e.ts, h.finish())
+    };
+    let keys: Vec<_> = s.events.iter().map(key).collect();
+    let mut k = keys.iter();
+    s.events.retain(|_| !seen.contains(k.next().unwrap()));
+    seen.extend(keys);
 }
 
 /// `SESSION` as `show` takes it: a session id prefix, or `prefix/agent-prefix`.

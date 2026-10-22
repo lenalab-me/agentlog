@@ -26,9 +26,15 @@ fn program(bin: &Path, name: &str) {
 }
 
 fn tool_use(ts: &str, name: &str, input: Value) -> String {
+    // every call has its own id, as in Claude Code's logs (a copied history shares them)
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let id = format!(
+        "toolu_{}",
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     json!({
         "type": "assistant", "timestamp": ts,
-        "message": {"content": [{"type": "tool_use", "id": "t", "name": name, "input": input}]}
+        "message": {"content": [{"type": "tool_use", "id": id, "name": name, "input": input}]}
     })
     .to_string()
 }
@@ -122,7 +128,11 @@ fn world() -> World {
             json!({}),
         ),
         tool_use("2026-10-04T10:00:00Z", "Skill", json!({"skill": "draw"})),
-        tool_use("2026-10-04T10:30:00Z", "Skill", json!({"skill": "draw-folder"})),
+        tool_use(
+            "2026-10-04T10:30:00Z",
+            "Skill",
+            json!({"skill": "draw-folder"}),
+        ),
         typed(
             "2026-10-04T11:00:00Z",
             "<command-name>/plan-it</command-name>\n<command-args></command-args>",
@@ -399,5 +409,39 @@ fn unreadable_logs_and_flags_of_other_commands_are_refused() {
     ] {
         let (code, _, err) = agentlog(&w, args);
         assert_eq!(code, 2, "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn a_copied_history_counts_once_and_a_cut_line_does_not_hide_a_file() {
+    let w = world();
+    let before = rows(&report(&w));
+    let project = w.home.join(".claude/projects/-Users-t-work-x");
+    // a session that starts with a copy of s1 (the same ids, times and uuids), then goes on
+    let mut typed_line: Value = serde_json::from_str(&typed(
+        "2026-10-04T12:00:00Z",
+        "<command-name>/draw</command-name>",
+    ))
+    .unwrap();
+    typed_line["uuid"] = json!("u-1");
+    fs::write(
+        project.join("s1.jsonl"),
+        fs::read_to_string(project.join("s1.jsonl")).unwrap() + &format!("{typed_line}\n"),
+    )
+    .unwrap();
+    let copy = fs::read_to_string(project.join("s1.jsonl")).unwrap();
+    let cut = bash("2026-10-05T12:00:00Z", "zzjson CUT").replace("CUT", "\\ud83d");
+    let mut s2 = format!("{copy}{cut}\n").into_bytes();
+    s2.extend_from_slice(
+        b"{\"type\":\"assistant\",\"timestamp\":\"2026-10-05T12:01:00Z\",\"x\":\"\xe3\x81",
+    );
+    fs::write(project.join("s2.jsonl"), s2).unwrap();
+    let after = report(&w);
+    for (kind, name, n, _) in before {
+        let more = match (kind.as_str(), name.as_str()) {
+            ("cli", "zzjson") | ("skill", "draw") => 1,
+            _ => 0,
+        };
+        assert_eq!(uses(&after, &kind, &name), n + more, "{kind} {name}");
     }
 }

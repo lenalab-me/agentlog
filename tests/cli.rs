@@ -1884,3 +1884,37 @@ fn a_subagent_inside_its_parents_file_is_its_own_context() {
         "{ctxs:?}"
     );
 }
+
+#[test]
+fn search_shows_a_copied_history_once_and_reads_a_cut_emoji() {
+    let d = tempfile::tempdir().unwrap();
+    let s2 = "bbbbbbbb-2222-4000-8000-000000000002";
+    let p = d.path().join("-p-net");
+    let said = |sid| user(sid, "2026-10-02T05:00:00Z", "ZEBRA once");
+    write_lines(&p.join(format!("{S1}.jsonl")), &[said(S1)]);
+    // s2 starts with a copy of s1's history, then goes on
+    let own = user(s2, "2026-10-02T06:00:00Z", "ZEBRA again CUT")
+        .to_string()
+        .replace("CUT", "\\ud83d");
+    fs::write(
+        p.join(format!("{s2}.jsonl")),
+        format!("{}\n{own}\n", said(s2)),
+    )
+    .unwrap();
+    let got: Vec<(String, String)> = hits(d.path(), &["ZEBRA"])
+        .iter()
+        .map(|h| {
+            (
+                h["id"].as_str().unwrap().into(),
+                h["snippet"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("aaaaaaaa".into(), "ZEBRA once".into()),
+            ("bbbbbbbb".into(), "ZEBRA again \u{fffd}".into())
+        ]
+    );
+}

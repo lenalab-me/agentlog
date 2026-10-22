@@ -151,8 +151,12 @@ Cache (search, show, timeline): one file per log under ~/.cache/agentlog/<claude
 
 What it counts (repeats, tool, daily):
   Each session file and each subagent file is one context (a subagent starts empty, so
-  the same mistake there counts again). The window applies to each call's own time, so
-  a resumed old session does not bring its old calls in.
+  the same mistake there counts again); so is a subagent whose lines sit in its parent's
+  file (isSidechain). The window applies to each call's own time, so a resumed old
+  session does not bring its old calls in. A session that begins with a copy of another's
+  history (the same call ids) does not count those calls again (unused neither; search
+  and timeline show the copied words once). A line that is not JSON is passed over; half
+  of a UTF-16 pair (an emoji cut short) reads as U+FFFD.
 
   repeats: failed calls grouped by signature: the tool, for Bash the program, and the
   first error line with paths, ids and numbers flattened (a call refused before it ran,
