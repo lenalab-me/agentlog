@@ -521,10 +521,15 @@ enum Target {
 fn target_of(failed: &[&Call], next: &Call) -> Target {
     let aimed: Vec<String> = failed.iter().flat_map(|c| written(c, true)).collect();
     let wrote = written(next, false);
+    // `../x` with no `cd` before it is under a directory we do not know: it may be any file
+    // named x one level up, so it cannot be told apart from the other path.
+    let above = |p: &String| p == ".." || p.starts_with("../");
     if aimed.is_empty() || wrote.is_empty() {
         Target::Unknown
     } else if wrote.iter().any(|w| aimed.iter().any(|a| same_path(a, w))) {
         Target::Same
+    } else if aimed.iter().chain(&wrote).any(above) {
+        Target::Unknown
     } else {
         Target::Another
     }
@@ -673,25 +678,39 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
                 i += 1;
                 continue;
             };
-            let mut j = i;
-            while matches!(evs.get(j + 1), Some(Ev::Use { failed: true, .. })) {
-                j += 1;
+            // The run: failed uses, and between them work on another file than the ones
+            // that failed (not an escape: it is noted and passed over).
+            let mut failures: Vec<&Call> = Vec::new();
+            let mut k = i;
+            loop {
+                match evs.get(k) {
+                    Some(Ev::Use {
+                        call, failed: true, ..
+                    }) => failures.push(call),
+                    Some(Ev::Alt { call, label, .. })
+                        if spec.same_file && target_of(&failures, call) == Target::Another =>
+                    {
+                        let f = failures[failures.len() - 1];
+                        *another_file.entry(label.clone()).or_default() += 1;
+                        another_ex.push((
+                            f.ts,
+                            log.ctxs[ctx].label.clone(),
+                            fail_line(spec, f),
+                            format!("{label}: {}", head(&call.input, 90)),
+                        ));
+                    }
+                    _ => break,
+                }
+                k += 1;
             }
-            let n = j - i + 1;
-            let outcome = match evs.get(j + 1) {
+            let n = failures.len();
+            let outcome = match evs.get(k) {
                 None => "context ended after it".to_string(),
                 Some(Ev::Use { .. }) if n == 1 => "fixed on the next call".to_string(),
                 Some(Ev::Use { .. }) => format!("fixed after {n} failures in a row"),
                 Some(Ev::Alt { call, label, .. }) => {
-                    let failures: Vec<&Call> = evs[i..=j]
-                        .iter()
-                        .filter_map(|e| match e {
-                            Ev::Use { call, .. } => Some(*call),
-                            _ => None,
-                        })
-                        .collect();
                     let target = spec.same_file.then(|| target_of(&failures, call));
-                    let f = failures[failures.len() - 1];
+                    let f = failures[n - 1];
                     let after = if n == 1 {
                         String::new()
                     } else {
@@ -703,45 +722,28 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
                             "  (same file)",
                             format!("went another way on the same file{after}"),
                         ),
-                        Some(Target::Unknown) => (
+                        // another file was passed over above
+                        Some(Target::Unknown | Target::Another) => (
                             "  (file not known)",
                             format!("went another way, file not known{after}"),
                         ),
-                        Some(Target::Another) => (
-                            "",
-                            format!("another way on another file{after} (not an escape)"),
-                        ),
                     };
-                    let ex = (
+                    *escapes.entry(label.clone()).or_default() += 1;
+                    escape_ex.push((
                         f.ts,
                         log.ctxs[ctx].label.clone(),
                         fail_line(spec, f),
                         format!("{label}: {}{tag}", head(&call.input, 90)),
-                    );
-                    if target == Some(Target::Another) {
-                        *another_file.entry(label.clone()).or_default() += 1;
-                        another_ex.push(ex);
-                    } else {
-                        *escapes.entry(label.clone()).or_default() += 1;
-                        escape_ex.push(ex);
-                    }
+                    ));
                     outcome
                 }
             };
             *outcomes.entry(outcome).or_default() += 1;
             if n >= 2 {
-                let lines = evs[i..=j]
-                    .iter()
-                    .filter_map(|e| match e {
-                        Ev::Use { call, .. } => Some(fail_line(spec, call)),
-                        _ => None,
-                    })
-                    .collect();
-                if let Ev::Use { call, .. } = &evs[i] {
-                    streak_ex.push((call.ts, log.ctxs[ctx].label.clone(), lines));
-                }
+                let lines = failures.iter().map(|c| fail_line(spec, c)).collect();
+                streak_ex.push((failures[0].ts, log.ctxs[ctx].label.clone(), lines));
             }
-            i = j + 1;
+            i = k;
         }
     }
 

@@ -144,27 +144,55 @@ fn an_escape_is_another_way_on_the_file_that_failed() {
         ("Bash", bash("sed -i '' s/a/b/ \"$f\"")),
     );
 
+    // `../x` with no `cd`: one level above a directory not known
+    failed_then(
+        r,
+        "unknown-above",
+        "rpatch ../lib/b.rs <<'EOF'",
+        NOT_FOUND,
+        ("Edit", file("/w/lib/b.rs")),
+    );
+    // work on another file is passed over: what comes after it ends the run
+    let new_file = ("Write", file("/w/notes/new.md"), "", false);
+    session(
+        &r.join("-p/another-then-fixed.jsonl"),
+        &[
+            ("Bash", bash("rpatch src/a.rs <<'EOF'"), NOT_FOUND, true),
+            new_file.clone(),
+            ("Bash", bash("rpatch src/a.rs <<'EOF'"), "M src/a.rs", false),
+        ],
+    );
+    session(
+        &r.join("-p/another-then-same.jsonl"),
+        &[
+            ("Bash", bash("rpatch src/a.rs <<'EOF'"), NOT_FOUND, true),
+            new_file,
+            ("Edit", file("/w/src/a.rs"), "", false),
+        ],
+    );
+
     let j: Value = serde_json::from_str(&run(r, &["tool", "rpatch", "--json"])).unwrap();
     assert_eq!(
         j["after_failure"],
         json!({
-            "went another way on the same file": 4,
-            "another way on another file (not an escape)": 3,
-            "went another way, file not known": 2,
+            "went another way on the same file": 5,
+            "went another way, file not known": 3,
+            "context ended after it": 3,
+            "fixed on the next call": 1,
         })
     );
     assert_eq!(
         j["went_to"],
-        json!({"Edit": 2, "Bash sed": 2, "Bash perl": 1, "Bash python3": 1})
+        json!({"Edit": 4, "Bash sed": 2, "Bash perl": 1, "Bash python3": 1})
     );
     assert_eq!(
         j["another_file"],
-        json!({"Edit": 1, "Bash cat": 1, "Bash python3": 1})
+        json!({"Edit": 1, "Bash cat": 1, "Bash python3": 1, "Write": 2})
     );
 
-    let text = run(r, &["tool", "rpatch", "--examples", "9"]);
+    let text = run(r, &["tool", "rpatch", "--examples", "20"]);
     assert!(
-        text.contains("    on another file: Bash cat 1, Bash python3 1, Edit 1\n"),
+        text.contains("    on another file: Bash cat 1, Bash python3 1, Edit 1, Write 2\n"),
         "{text}"
     );
     assert!(text.contains("=> Edit: /w/src/a.rs  (same file)"), "{text}");

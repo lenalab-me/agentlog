@@ -39,7 +39,7 @@ agentlog tool rpatch --since 2026-10-01T00:00Z -v
 
 - **`first use in the window`** と **`other ways per day: X before … Y after`.** 前より後が減っていれば、置き換わっている。前が 1 日に満たないと、この行は出ない（窓を前に広げる）。
 - **`after a failure`.** `fixed on the next call` が大半なら、失敗してもすぐ直せている。数えるべきは `fixed after N failures in a row`（同じ道具で続けて失敗）と `went another way`（別の手段に逃げた）。
-- **`went to`.** どこへ逃げたか。`-v` で、失敗の行と逃げた先のコマンドを見る。rpatch は、失敗したのと同じファイルに逃げたもの（`(same file)`）と、ファイルが分からないもの（`(file not known)`）を逃げに数え、別のファイルへの別のやり方は `on another file` に分ける。分からないものには、新しいスクリプトを書いただけのもの（逃げではない）が混じる。
+- **`went to`.** どこへ逃げたか。`-v` で、失敗の行と逃げた先のコマンドを見る。rpatch は、失敗したのと同じファイルに逃げたもの（`(same file)`）と、ファイルが分からないもの（`(file not known)`）を逃げに数え、別のファイルへの別のやり方は `on another file` に分けて素通りする（その先で rpatch が直せば `fixed`）。分からないものには、新しいスクリプトを書いただけのもの（逃げではない）が混じる。
 - **`other ways` の内訳.** 道具ができた後にも残っている別のやり方。多いものが、案内か hook で塞ぐ候補。
 
 日ごとの表の `<- first use` の前後で、`other` の列が減っているかも見る。

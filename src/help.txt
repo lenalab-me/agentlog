@@ -184,10 +184,12 @@ What it counts (repeats, tool, daily):
   `=== FILE`, JSON "file", the file of `edits[N]`), read from the other way: Edit's and
   Write's file_path, the files of sed -i, perl -i and sd, `cat > F`, `>| F`, python's
   open(F, 'w') and Path(F).write_text. A relative path is under a leading `cd DIR`, and
-  matches the end of a full path. Another file is not an escape: `another way on another
-  file (not an escape)`, `on another file`. When the file of either call is not known (a
-  path in a variable, an rpatch with nothing in it), it counts as an escape as it did,
-  apart: `went another way, file not known`. Other tools do not compare files.
+  matches the end of a full path. Another way on another file is not an escape: it is
+  listed as `on another file` and passed over, and what comes after it ends the run (the
+  tool again: fixed; the same file: an escape). When the file of either call is not known
+  (a path in a variable, an rpatch with nothing in it, `../x` with no `cd`), it counts as
+  an escape as it did, apart: `went another way, file not known`. Other tools do not
+  compare files.
 
   daily: calls per local day whose input (the Bash command, the file path, or the tool
   input) or result matches each REGEX.
