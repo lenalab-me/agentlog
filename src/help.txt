@@ -178,7 +178,7 @@ What it counts (repeats, tool, daily):
   tool: one failure fixed on the next call is fine. It reports runs of failures and
   what came after each run: the tool again (fixed), another way of doing the job (went
   another way), or the end of the context. Calls of neither kind between are skipped.
-  Presets: rpatch (other ways: Edit, python replace, sd, sed -i, perl -i; right after a
+  Presets: rpatch (other ways: Edit, MultiEdit, python replace, sd, sed -i, perl -i; right after a
   failure also Write, cat >, >|) and devsrv (other ways: lsof -i, pkill, nohup, kill,
   `server &`, until-curl loops). Any other NAME is a tool name (Edit, an MCP tool), or
   a Bash program with --uses; the options below replace the preset's.
