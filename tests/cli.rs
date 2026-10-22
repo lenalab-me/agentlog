@@ -2130,3 +2130,61 @@ fn the_logs_are_where_claude_config_dir_and_codex_home_say() {
         "{err}"
     );
 }
+
+#[test]
+fn an_option_of_another_command_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    for args in [
+        &["repeats", "--who", "user"][..],
+        &["daily", "x=a", "-v"],
+        &["tool", "rpatch", "--in", "input"],
+        &["search", "x", "--top", "1"],
+        &["show", "abc", "--limit", "3"],
+        &["unused", "-i"],
+        &["timeline", "--repo", ".", "--full"],
+    ] {
+        let (code, _, err) = run(d.path(), args);
+        assert_eq!(code, 2, "{args:?}: {err}");
+        let first = err.lines().next().unwrap();
+        assert!(first.contains("does not take it"), "{args:?}: {first}");
+    }
+    // the options a command reads still pass
+    let (code, _, err) = run(
+        d.path(),
+        &["repeats", "--top", "3", "--all", "-v", "--tool", "Bash"],
+    );
+    assert_eq!(code, 0, "{err}");
+}
+
+/// An unclosed code fence turns the rest of a document into code.
+#[test]
+fn every_code_fence_in_the_docs_is_closed() {
+    for doc in ["README.md", "docs/design.md", "docs/recipes.md"] {
+        let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(doc)).unwrap();
+        let fences = text
+            .lines()
+            .filter(|l| l.trim_start().starts_with("```"))
+            .count();
+        assert_eq!(fences % 2, 0, "{doc} has {fences} fences");
+    }
+}
+
+#[test]
+fn memory_reads_no_window_so_its_order_is_not_checked() {
+    let d = tempfile::tempdir().unwrap();
+    let args = [
+        "memory",
+        "x",
+        "--since",
+        "2026-10-05",
+        "--until",
+        "2026-10-01",
+    ];
+    let (code, _, err) = run(d.path(), &args);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, _) = run(
+        d.path(),
+        &["repeats", "--since", "2026-10-05", "--until", "2026-10-01"],
+    );
+    assert_eq!(code, 2);
+}

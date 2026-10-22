@@ -42,8 +42,9 @@ search: one line per utterance that matches (the first match in it): local time,
   the newest are kept and the count is printed. Only typed words and the assistant's text
   are searched: not tool inputs, tool results, thinking, system reminders or other text
   the harness adds. id is 8 characters of the session, or SESSION/AGENT for a Claude
-  subagent. Project is the session's first working directory, without home and
-  project/prod/. -i ignores case.
+  subagent. Project is the session's first working directory, without the home directory
+  (this machine's, or one under /Users or /home) and a leading project/prod/ or project/ (the
+  author's layout; other paths are shown as they are). -i ignores case.
 
 show: SESSION is an id or its first characters (several fit: they are listed, exit 2).
   It prints the utterances in order, tool calls as `[Bash] first line…`. --grep RE (first

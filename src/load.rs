@@ -91,13 +91,14 @@ pub fn mtime(p: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-/// `-Users-me-project-prod-x` → `project-prod-x`, from the home directory's spelling.
+/// `-Users-me-project-prod-x` → `project-prod-x`, from the home directory's spelling (Claude
+/// Code writes every character but letters and digits as `-`).
 pub fn short_project(dir: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let prefix: String = home
-        .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect();
+    short_project_in(dir, &std::env::var("HOME").unwrap_or_default())
+}
+
+fn short_project_in(dir: &str, home: &str) -> String {
+    let prefix = crate::memory::folder_name(home);
     let s = dir.strip_prefix(&prefix).unwrap_or(dir);
     let s = s.trim_start_matches('-');
     if s.is_empty() {
@@ -416,4 +417,19 @@ pub fn load(root: &Path, f: &Filter) -> io::Result<Log> {
         }
     }
     Ok(log)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_home_folder_is_spelled_as_claude_code_spells_it() {
+        assert_eq!(
+            short_project_in("-Users-me-x-project-a", "/Users/me.x"),
+            "project-a"
+        );
+        assert_eq!(short_project_in("-home-a-b-c-x", "/home/a_b@c"), "x");
+        assert_eq!(short_project_in("-Users-me", "/Users/me"), "~");
+    }
 }

@@ -304,7 +304,7 @@ fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts
     if sessions.len() != 1 {
         if sessions.is_empty() {
             eprintln!(
-                "agentlog: no session starts with `{spec}` under {} (a subagent is `SESSION/AGENT`; --since, --exclude and --include-self apply)",
+                "agentlog: no session starts with `{spec}` under {} (a subagent is `SESSION/AGENT`; --since and --exclude apply)",
                 c.root.display()
             );
         } else {

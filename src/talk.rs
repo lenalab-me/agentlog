@@ -233,8 +233,20 @@ pub fn note(name: &str, detail: &str) -> String {
 /// `/Users/me/project/prod/network/designer` → `network/designer`: the session's first
 /// working directory, without the home directory and the usual `project/prod/`.
 pub fn project_name(cwd: &str) -> String {
-    let mut parts: Vec<&str> = cwd.split('/').filter(|s| !s.is_empty()).collect();
-    if parts.len() >= 2 && matches!(parts[0], "Users" | "home") {
+    project_name_in(cwd, &std::env::var("HOME").unwrap_or_default())
+}
+
+/// `project_name` with `home` for the home directory: it is left out wherever it is
+/// (`/root`), and so is a home under `/Users` or `/home` (another machine's, over ssh).
+fn project_name_in(cwd: &str, home: &str) -> String {
+    let home = home.trim_end_matches('/');
+    let in_home = !home.is_empty()
+        && cwd
+            .strip_prefix(home)
+            .is_some_and(|r| r.is_empty() || r.starts_with('/'));
+    let rest = if in_home { &cwd[home.len()..] } else { cwd };
+    let mut parts: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+    if !in_home && parts.len() >= 2 && matches!(parts[0], "Users" | "home") {
         parts.drain(..2);
     }
     if parts.len() > 1 && parts[0] == "project" {
@@ -593,6 +605,15 @@ mod tests {
         assert!(sent_for_a_task("You have 2 orchestration messages. Run it"));
         assert!(!sent_for_a_task("Please act as the reviewer"));
         assert!(!sent_for_a_task("You have a point about the design"));
+    }
+
+    #[test]
+    fn the_home_directory_is_left_out_wherever_it_is() {
+        assert_eq!(project_name_in("/root/project/x", "/root"), "x");
+        assert_eq!(project_name_in("/root", "/root/"), "~");
+        assert_eq!(project_name_in("/rooted/x", "/root"), "rooted/x");
+        assert_eq!(project_name_in("/home/u/shop", "/root"), "shop");
+        assert_eq!(project_name_in("/srv/shop", ""), "srv/shop");
     }
 
     #[test]

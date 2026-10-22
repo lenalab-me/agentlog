@@ -73,6 +73,31 @@ pub struct Parsed {
 
 const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION|timeline --repo DIR|memory REGEX|rules|unused [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
 
+/// Options that only some commands read (the others' are checked where they are read).
+const ONLY: &[(&str, &[&str])] = &[
+    ("--top", &["repeats"]),
+    ("--all", &["repeats"]),
+    ("--examples", &["repeats", "tool"]),
+    ("-v", &["repeats", "tool"]),
+    ("--tool", &["repeats", "daily"]),
+    ("--in", &["daily"]),
+    ("--failed", &["daily"]),
+    ("-i", &["search", "show", "memory"]),
+    ("--who", &["search", "timeline"]),
+    ("--limit", &["search"]),
+    ("--grep", &["show"]),
+    ("--at", &["show"]),
+    ("--around", &["show"]),
+    ("--full", &["show"]),
+    ("--uses", &["tool"]),
+    ("--fail", &["tool"]),
+    ("--alt", &["tool"]),
+    ("--alt-tool", &["tool"]),
+    ("--escape", &["tool"]),
+    ("--escape-tool", &["tool"]),
+    ("--ignore", &["tool"]),
+];
+
 fn regex(flag: &str, s: &str) -> Result<Regex, String> {
     Regex::new(s).map_err(|e| format!("{flag}: not a regex: {e}"))
 }
@@ -152,12 +177,16 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             .collect()
     };
 
+    let mut given: Vec<String> = Vec::new();
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         let (flag, inline) = match a.split_once('=') {
             Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
             _ => (a.clone(), None),
         };
+        if flag.starts_with('-') {
+            given.push(flag.clone());
+        }
         let value = |it: &mut std::vec::IntoIter<String>| -> Result<String, String> {
             inline
                 .clone()
@@ -288,6 +317,17 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         };
         return Ok(Parsed { cmd, common });
     }
+    // An option of another command would be read by nothing here.
+    if let Some((flag, subs)) = given.iter().find_map(|g| {
+        ONLY.iter()
+            .find(|(f, _)| f == g)
+            .filter(|(_, subs)| !subs.contains(&sub.as_str()))
+    }) {
+        return Err(format!(
+            "{flag} is for {}; {sub} does not take it\n{USAGE}",
+            subs.join(" and ")
+        ));
+    }
     // Looking back for a conversation may reach far; the other reports want recent calls.
     if (sub == "search" || sub == "show") && !since_given {
         common.since = 0;
@@ -304,7 +344,8 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
     {
         common.excludes.push(id);
     }
-    if common.since >= common.until {
+    // memory and rules read no window: their --since and --until are not looked at
+    if common.since >= common.until && sub != "memory" && sub != "rules" {
         return Err("--since must be before --until".into());
     }
     if (source_given || common.codex_roots_given)
@@ -315,7 +356,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         && sub != "rules"
     {
         return Err(format!(
-            "--source and --codex-root are for search, show and timeline; {sub} reads Claude Code's logs only"
+            "--source and --codex-root are for search, show and timeline (--source for memory and rules too); {sub} reads Claude Code's logs only"
         ));
     }
     let on_memories = sub == "memory" || sub == "rules";
