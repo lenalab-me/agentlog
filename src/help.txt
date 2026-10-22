@@ -108,9 +108,10 @@ unused: what is installed beside how often the logs used it in the window, the l
   the servers of .mcp.json or of mcpServers in .claude-plugin/plugin.json, and skills/),
   ~/.claude/skills/*/SKILL.md (the frontmatter's name, else the folder's), and the commands the
   "CLI tools" section of ~/.claude/CLAUDE.md names: the first word of each `code span`, but not
-  in a bullet's label (before its first colon outside brackets), after "instead of" in the same
-  sentence, in a span that goes on a list right after a span of several words (a subcommand),
-  or a name with no program on PATH (the place's line names those). Every place is printed with
+  in a bullet's label (before its first colon outside brackets, in its first sentence), after
+  "instead of" in the same sentence, in a span that goes on a list (`, x`, `(or x)`) right after
+  a span of several words (a subcommand) or an option (one of its values), or a name with no
+  program on PATH (the place's line names those). Every place is printed with
   what was found there; one that cannot be read is skipped and named. Not read: a project's
   .mcp.json or .claude/skills, ~/.claude/commands, skills the app brings, Codex's settings.
   Used: an MCP server by its tool calls (mcp__SERVER__tool, SERVER with `_` for what is not a

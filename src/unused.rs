@@ -419,27 +419,40 @@ fn named_commands(section: &str) -> Vec<String> {
     }
     for item in &items {
         let parts: Vec<&str> = item.split('`').collect();
-        // The text part where the label ends (a colon outside brackets); spans before it are
-        // in the label.
+        // The text part where the label ends (a colon outside brackets, in the first
+        // sentence); spans before it are in the label. A colon after a sentence has ended
+        // (`Chain it (`x && y`): …`) is in the text, not a label.
         let mut depth = 0i32;
         let mut label_end = 0;
+        let mut ended = false;
         for (k, p) in parts.iter().enumerate().step_by(2) {
-            let colon = p.char_indices().any(|(j, c)| {
+            let mut colon = false;
+            for (j, c) in p.char_indices() {
                 depth += match c {
                     '(' => 1,
                     ')' => -1,
                     _ => 0,
                 };
-                c == ':' && depth <= 0 && p[j + 1..].chars().next().is_none_or(|n| n == ' ')
-            });
+                ended |= depth <= 0 && c == '.' && p[j + 1..].starts_with(' ');
+                if ended {
+                    break;
+                }
+                if c == ':' && depth <= 0 && p[j + 1..].chars().next().is_none_or(|n| n == ' ') {
+                    colon = true;
+                    break;
+                }
+            }
             if colon {
                 label_end = k;
+            }
+            if colon || ended {
                 break;
             }
         }
         // Odd parts are code spans, even parts the text between them.
         let mut negated = false;
         let mut prev_words = 0;
+        let mut prev_option = false;
         let mut continuing = false;
         for (i, part) in parts.iter().enumerate() {
             if i % 2 == 0 {
@@ -454,10 +467,13 @@ fn named_commands(section: &str) -> Vec<String> {
             if i + 1 == parts.len() {
                 break; // an unclosed span
             }
-            let gap = parts[i - 1];
-            let list = i >= 3 && matches!(gap.trim(), "," | "and" | ", and" | "or" | ", or");
-            continuing = list && (continuing || prev_words > 1);
+            // `(or …)` goes on a list too; after an option (`--source codex` (or `all`)) what
+            // follows is another value of it, not a command
+            let gap = parts[i - 1].trim().trim_start_matches('(').trim();
+            let list = i >= 3 && matches!(gap, "," | "and" | ", and" | "or" | ", or");
+            continuing = list && (continuing || prev_words > 1 || prev_option);
             prev_words = part.split_whitespace().count();
+            prev_option = part.starts_with('-');
             let Some(word) = part.split_whitespace().next() else {
                 continue;
             };
@@ -852,12 +868,12 @@ mod tests {
                    Use them instead of `cmd &`, `sleep` loops, `lsof -i` and `pkill` (`ii --help`).\n\
                  - More: `jj run -- CMD` (`.jj.toml`), `jj ls`, `logs --follow`, `stop`; `--json` (or `all`)\n\
                  - Heavy jobs (`kk run`, tests), when asked: `ll run -- CMD`\n\
-                 - Check it with `mm` (format: `mm --help`)\n";
+                 - Check it with `mm` (format: `mm --help`)\n\
+                 - To fix one, use `nn` (format: `nn --help`). Chain it (`nn <<'EOF' && x`): later\n\
+                 - Logs with `oo log --source a` (or `b`), `oo show`\n";
         assert_eq!(
             named_commands(s),
-            [
-                "aa", "cc", "ee", "ff", "gg", "hh", "ii", "jj", "all", "ll", "mm"
-            ]
+            ["aa", "cc", "ee", "ff", "gg", "hh", "ii", "jj", "ll", "mm", "nn", "oo"]
         );
     }
 
