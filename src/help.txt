@@ -15,7 +15,7 @@ Every command takes:
   --since WHEN  --until WHEN  --project S  --exclude S  --json  --root DIR (default ~/.claude/projects)
   --include-self (the running session is left out). --since defaults to 14d, none for search and
   show; memory and rules read no time window.
-  WHEN is 2026-10-07, 2026-10-07T08:57 (local), 2026-10-01T00:00Z, or 14d / 6h ago.
+  WHEN: 2026-10-07, 2026-10-07T08:57 (local), …Z or +09:00, 14d / 6h ago; --until is not included.
 search, show and timeline also read Codex's logs (--source claude|codex|all: show all, the others
   claude; --codex-root DIR) and cache what they read in ~/.cache/agentlog (safe to delete; --raw: no cache).
 

@@ -55,13 +55,45 @@ fn num(s: &str) -> Option<i64> {
     s.parse().ok()
 }
 
-/// `YYYY-MM-DD[THH:MM[:SS[.fff]]][Z|±HH:MM]`. Without a zone the time is local.
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        2 if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// `±HH:MM`, `±HHMM` or `±HH` (after the sign) in seconds; `None` for anything else.
+fn zone_offset(z: &str) -> Option<i64> {
+    let (h, m) = match (z.len(), z.find(':')) {
+        (5, Some(2)) => (&z[..2], &z[3..]),
+        (4, None) => (&z[..2], &z[2..]),
+        (2, None) => (z, "0"),
+        _ => return None,
+    };
+    let (h, m) = (num(h)?, num(m)?);
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(h * 3600 + m * 60)
+}
+
+/// The UTC time of a local clock reading. The offset is the one in force at that time,
+/// found from the offset at the reading taken as UTC (they differ near a change of
+/// daylight saving time, by up to the offset itself).
+fn from_local(naive: i64) -> i64 {
+    let guess = naive - local_offset(naive);
+    naive - local_offset(guess)
+}
+
+/// `YYYY-MM-DD[THH:MM[:SS[.fff]]][Z|±HH:MM|±HHMM|±HH]`. Without a zone the time is local.
 pub fn parse_iso(s: &str) -> Option<i64> {
     let s = s.trim();
     let (date, rest) = s.split_at(s.find(['T', ' ']).unwrap_or(s.len()));
     let mut dp = date.split('-');
     let (y, mo, d) = (num(dp.next()?)?, num(dp.next()?)?, num(dp.next()?)?);
-    if dp.next().is_some() || !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+    if dp.next().is_some() || !(1..=12).contains(&mo) || !(1..=days_in_month(y, mo)).contains(&d) {
         return None;
     }
     let rest = rest.get(1..).unwrap_or("");
@@ -85,21 +117,14 @@ pub fn parse_iso(s: &str) -> Option<i64> {
         secs = h * 3600 + mi * 60 + se;
     }
     let naive = days_from_civil(y, mo, d) * 86400 + secs;
-    let offset = match zone {
-        None => local_offset(naive),
-        Some("Z") => 0,
+    match zone {
+        None => Some(from_local(naive)),
+        Some("Z") => Some(naive),
         Some(z) => {
             let sign = if z.starts_with('-') { -1 } else { 1 };
-            let mut zp = z[1..].split(':');
-            let h = num(zp.next()?)?;
-            let m = match zp.next() {
-                Some(x) => num(x)?,
-                None => 0,
-            };
-            sign * (h * 3600 + m * 60)
+            Some(naive - sign * zone_offset(&z[1..])?)
         }
-    };
-    Some(naive - offset)
+    }
 }
 
 /// `--since`/`--until`: an ISO time (local unless it has a zone), or `Nd` / `Nh` before now.
@@ -159,6 +184,13 @@ mod tests {
         );
         assert_eq!(iso_utc(1791892159), "2026-10-13T11:49:19Z");
         assert_eq!(parse_iso(&iso_utc(1791892159)), Some(1791892159));
+        // the colon of the zone may be left out, and the minutes too
+        assert_eq!(parse_iso("2026-10-13T20:49:19+0900"), Some(1791892159));
+        assert_eq!(parse_iso("2026-10-13T20:49:19+09"), Some(1791892159));
+        assert_eq!(
+            parse_iso("2024-02-29"),
+            parse_iso("2024-03-01").map(|t| t - 86400)
+        );
     }
 
     #[test]
@@ -170,6 +202,14 @@ mod tests {
             "2026-10-01T25:00",
             "10/01",
             "2026-10-01Tab",
+            "2026-02-31",
+            "2026-02-29",
+            "2026-04-31",
+            "2026-10-01T00:00+900",
+            "2026-10-01T00:00+9:00",
+            "2026-10-01T00:00+24:00",
+            "2026-10-01T00:00+09:60",
+            "2026-10-01T00:00+09:00:00",
         ] {
             assert_eq!(parse_iso(s), None, "{s}");
         }

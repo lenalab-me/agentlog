@@ -185,7 +185,10 @@ fn what_the_user_refused_is_not_a_failure() {
     );
     assert_eq!(json_of(d.path(), &["repeats"])["signatures"], json!([]));
     let j = json_of(d.path(), &["tool", "Edit"]);
-    assert_eq!((j["uses"].clone(), j["failed"].clone()), (json!(1), json!(0)));
+    assert_eq!(
+        (j["uses"].clone(), j["failed"].clone()),
+        (json!(1), json!(0))
+    );
     assert_eq!(j["after_failure"], json!({}));
     let j = json_of(d.path(), &["daily", "x=.", "--failed"]);
     assert_eq!(j["total"]["x"], 0);
@@ -1992,4 +1995,26 @@ fn a_codex_fork_by_the_user_does_not_say_its_parents_words_again() {
             ("0000f003", "ZEBRA said at once"),
         ]
     );
+}
+
+#[test]
+fn a_local_time_near_a_change_of_daylight_saving_time_is_that_time() {
+    let d = tempfile::tempdir().unwrap();
+    for (when, local) in [
+        ("2026-03-08T03:30", "2026-03-08 03:30"),
+        ("2026-03-08T12:00", "2026-03-08 12:00"),
+        ("2026-11-01T05:00", "2026-11-01 05:00"),
+    ] {
+        let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+            .args(["daily", "x=.", "--json", "--since", when])
+            .args(["--root", d.path().to_str().unwrap()])
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env("HOME", "/nonexistent-home")
+            .env("TZ", "America/New_York")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let j: Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(j["since"], local, "{when}");
+    }
 }
