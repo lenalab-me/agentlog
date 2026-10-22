@@ -13,6 +13,7 @@ use crate::recall::{SearchOpts, ShowOpts, WhoFilter};
 use crate::rules::{DEFAULT_PATTERN, RulesOpts};
 use crate::time;
 use crate::timeline::TimelineOpts;
+use crate::unused::UnusedOpts;
 
 pub enum Cmd {
     /// `help [NAME]` or `NAME --help`: the summary, or what `help::render` makes of the name.
@@ -27,6 +28,7 @@ pub enum Cmd {
     Timeline(TimelineOpts),
     Memory(Scope, MemoryOpts),
     Rules(RulesOpts),
+    Unused(UnusedOpts),
 }
 
 /// `--source`: which agents' logs `search` and `show` read.
@@ -66,7 +68,7 @@ pub struct Parsed {
     pub common: Common,
 }
 
-const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION|timeline --repo DIR|memory REGEX|rules [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
+const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|search REGEX|show SESSION|timeline --repo DIR|memory REGEX|rules|unused [--since WHEN] [--until WHEN] [--project S] [--exclude S] [--json] [--source claude|codex|all] [--codex-root DIR]  (agentlog --help)";
 
 fn regex(flag: &str, s: &str) -> Result<Regex, String> {
     Regex::new(s).map_err(|e| format!("{flag}: not a regex: {e}"))
@@ -542,6 +544,17 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 count,
                 scope,
                 home: home.clone(),
+            })
+        }
+        "unused" => {
+            if !rest.is_empty() {
+                return Err(format!(
+                    "unused takes no arguments, got `{}`\n{USAGE}",
+                    rest.join(" ")
+                ));
+            }
+            Cmd::Unused(UnusedOpts {
+                home: PathBuf::from(&home),
             })
         }
         other => return Err(format!("unknown command `{other}`\n{USAGE}")),

@@ -10,6 +10,7 @@ Usage:
   agentlog timeline --repo DIR [--who user|any] [--source S]
   agentlog memory REGEX [-i] [--type T] [--index] [--source S] [--codex-memories DIR]
   agentlog rules [--repo DIR] [--pattern RE] [--count] [--source S] [--codex-memories DIR]
+  agentlog unused
 Every command takes:
   --since WHEN  --until WHEN  --project S  --exclude S  --json  --root DIR (default ~/.claude/projects)
   --include-self (the running session is left out). --since defaults to 14d, none for search and
@@ -20,15 +21,14 @@ search, show and timeline also read Codex's logs (--source claude|codex|all: sho
 
 Examples:
   agentlog repeats --since 2026-10-01               same failure in two or more places
-  agentlog repeats --tool Bash -v                   with the commands (may hold secrets)
   agentlog tool rpatch --since 2026-10-01T00:00Z    did it fix itself, or go another way?
   agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
   agentlog search 'too loose' -i --who user         what was said, oldest first
   agentlog show 1a2b3c4d --at '2026-10-02 14:25'    read around a hit (id and time as printed)
   agentlog timeline --repo ~/project/prod/x --since 2026-10-01   what was said and committed
   agentlog memory '関所' --type feedback            look something up in the memory files
-  agentlog rules --repo . --count                   how many prohibitions a session here reads
   agentlog rules --repo . --json                    give this to a model: do any of them collide?
+  agentlog unused --since 30d                       MCP, skills and CLIs installed, least used first
 
 Output: text tables; --json prints one JSON object instead (search, timeline: one per hit; memory:
 one per file; rules: one per line; each on its own line). Commands appear only with -v/--examples,
@@ -99,6 +99,28 @@ rules: count the prohibitions in the memory files and list them, so that they ca
   with --repo, --project or --exclude. Whether the two copies say the same is not compared.
   A rule for one project in global, or one for every project in repo or memory, is for a
   person or a model to find; nothing here judges it.
+
+unused: what is installed beside how often the logs used it in the window, the least used first,
+  so that a review can see what could go. It only lists; whether to remove one is yours.
+  Installed, from: ~/.claude.json (mcpServers, those of each project, and the claude.ai
+  connectors in claudeAiMcpEverConnected), ~/.claude/settings.json (a plugin set false in
+  enabledPlugins is left out), ~/.claude/plugins/installed_plugins.json (in each plugin's folder,
+  the servers of .mcp.json or of mcpServers in .claude-plugin/plugin.json, and skills/),
+  ~/.claude/skills/*/SKILL.md (the frontmatter's name, else the folder's), and the commands the
+  "CLI tools" section of ~/.claude/CLAUDE.md names: the first word of each `code span`, but not
+  in a bullet's label (before its first colon outside brackets), after "instead of" in the same
+  sentence, in a span that goes on a list right after a span of several words (a subcommand),
+  or a name with no program on PATH (the place's line names those). Every place is printed with
+  what was found there; one that cannot be read is skipped and named. Not read: a project's
+  .mcp.json or .claude/skills, ~/.claude/commands, skills the app brings, Codex's settings.
+  Used: an MCP server by its tool calls (mcp__SERVER__tool, SERVER with `_` for what is not a
+  letter, digit, `_` or `-`; a plugin's is plugin_PLUGIN_SERVER); a skill by Skill calls and by
+  /NAME typed by the user; a command by Bash calls that have it as a word (split at spaces and
+  ; & | ( ) < > `, so an argument counts too, as in `brew install x`; quoted, a path, or in a
+  heredoc's body it does not). Once per call. Claude Code's logs only, subagents included; the
+  window applies to each call's own time.
+  Output: kind (mcp, skill, cli), name, uses, last (the local day), from (where it is installed),
+  the least used first. --json: one object, "read" (place and found, or error) and "items".
 
 Codex logs (search, show and timeline; repeats, tool and daily read Claude Code's logs only):
   --source claude|codex|all: search and timeline read claude unless asked (or given --codex-root),

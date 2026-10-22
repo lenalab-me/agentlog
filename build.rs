@@ -21,6 +21,7 @@ const NOT_READERS: &[&str] = &[
     "rules.rs",
     "sig.rs",
     "timeline.rs",
+    "unused.rs",
 ];
 
 fn main() {

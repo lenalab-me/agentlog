@@ -18,6 +18,7 @@ const TOPICS: &[Topic] = &[
     ("timeline", "timeline:", &["codex", "cache"]),
     ("memory", "memory:", &[]),
     ("rules", "rules:", &[]),
+    ("unused", "unused:", &[]),
     ("codex", "Codex logs", &[]),
     ("cache", "Cache", &[]),
 ];

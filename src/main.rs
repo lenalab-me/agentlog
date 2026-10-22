@@ -16,6 +16,7 @@ mod sig;
 mod talk;
 mod time;
 mod timeline;
+mod unused;
 
 use cli::Cmd;
 use commands::Window;
@@ -63,6 +64,7 @@ fn main() {
         Cmd::Timeline(o) => return timeline(c, &filter, o),
         Cmd::Memory(sc, o) => return memory(c, sc, o),
         Cmd::Rules(o) => return rules(c, o),
+        Cmd::Unused(o) => return unused(c, &filter, o),
         _ => {}
     }
     let log = match load::load(&c.root, &filter) {
@@ -86,7 +88,8 @@ fn main() {
         | Cmd::Show(..)
         | Cmd::Timeline(_)
         | Cmd::Memory(..)
-        | Cmd::Rules(_) => unreachable!(),
+        | Cmd::Rules(_)
+        | Cmd::Unused(_) => unreachable!(),
     };
     if c.json {
         println!("{json}");
@@ -205,6 +208,17 @@ fn rules(c: &cli::Common, o: &rules::RulesOpts) {
             eprintln!("agentlog: {e}");
             std::process::exit(if e.starts_with("--repo") { 2 } else { 3 });
         }
+    }
+}
+
+fn unused(c: &cli::Common, filter: &load::Filter, o: &unused::UnusedOpts) {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let (text, json) =
+        unused::run(&c.root, filter, o, &path).unwrap_or_else(|e| unreadable(c.root.display(), e));
+    if c.json {
+        println!("{json}");
+    } else {
+        print!("{text}");
     }
 }
 
