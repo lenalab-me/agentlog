@@ -282,10 +282,7 @@ mod tests {
     }
 
     fn roots() -> Vec<String> {
-        vec![
-            "/h/p/shop/web".into(),
-            "/h/.t3/worktrees/web".into(),
-        ]
+        vec!["/h/p/shop/web".into(), "/h/.t3/worktrees/web".into()]
     }
 
     #[test]

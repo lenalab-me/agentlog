@@ -185,8 +185,8 @@ impl World {
         }
         let o = cmd
             .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("CODEX_HOME")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
             .env("HOME", self.path("home"))
             .env("XDG_CACHE_HOME", cache)
             .env("TZ", "UTC")
@@ -499,8 +499,18 @@ fn world() -> World {
         w.cxfork(),
         lines(&[
             cx_meta(CXFORK, "2026-10-02T12:00:00.000Z", &cwd, &fork),
-            cx_msg(1, "2026-10-02T12:00:00.300Z", "user", "codex ALPHA question"),
-            cx_msg(2, "2026-10-02T12:02:00.000Z", "user", "own words in the fork"),
+            cx_msg(
+                1,
+                "2026-10-02T12:00:00.300Z",
+                "user",
+                "codex ALPHA question",
+            ),
+            cx_msg(
+                2,
+                "2026-10-02T12:02:00.000Z",
+                "user",
+                "own words in the fork",
+            ),
         ]),
     )
     .unwrap();
@@ -548,7 +558,12 @@ fn what_is_appended_is_read_from_where_the_cache_stopped() {
     // the rest of a fork's copy, read after the cache stopped, is still the copy
     append(
         &w.cxfork(),
-        &lines(&[cx_msg(3, "2026-10-02T12:00:01.000Z", "user", "APPENDED copy")]),
+        &lines(&[cx_msg(
+            3,
+            "2026-10-02T12:00:01.000Z",
+            "user",
+            "APPENDED copy",
+        )]),
     );
     w.agree("lines appended");
     w.expect_hits("APPENDED", 3);

@@ -619,10 +619,7 @@ mod tests {
 
     #[test]
     fn project_names_drop_home_and_project_prod() {
-        assert_eq!(
-            project_name("/Users/me/project/prod/shop/web"),
-            "shop/web"
-        );
+        assert_eq!(project_name("/Users/me/project/prod/shop/web"), "shop/web");
         assert_eq!(project_name("/home/x/project/web"), "web");
         assert_eq!(project_name("/Users/me"), "~");
         assert_eq!(project_name("/Users/me/.t3/scratch/a"), ".t3/scratch/a");

@@ -935,10 +935,7 @@ fn codex_search_reads_only_what_was_said() {
     assert_eq!(all[0]["project"], "shop/web");
     assert_eq!(all[0]["timestamp"], "2026-10-02T05:02:00Z");
     assert_eq!(cx_hits(d.path(), &["ZEBRA", "--who", "assistant"]).len(), 1);
-    assert_eq!(
-        cx_hits(d.path(), &["ZEBRA", "--project", "web"]).len(),
-        4
-    );
+    assert_eq!(cx_hits(d.path(), &["ZEBRA", "--project", "web"]).len(), 4);
     assert_eq!(
         cx_hits(d.path(), &["ZEBRA", "--project", "elsewhere"]).len(),
         0
