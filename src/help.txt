@@ -12,9 +12,9 @@ Usage:
   agentlog rules [--repo DIR] [--pattern RE] [--count] [--source S] [--codex-memories DIR]
   agentlog unused
 Every command takes:
-  --since WHEN  --until WHEN  --project S  --exclude S  --json  --root DIR (default ~/.claude/projects)
-  --include-self (the running session is left out). --since defaults to 14d, none for search and
-  show; memory and rules read no time window.
+  --since WHEN  --until WHEN  --project S  --exclude S  --json  --root DIR  --include-self (the
+  running session is left out). --since defaults to 14d, none for search and show; memory and rules
+  read no window. Logs: ~/.claude/projects ($CLAUDE_CONFIG_DIR/projects), ~/.codex ($CODEX_HOME).
   WHEN: 2026-10-07, 2026-10-07T08:57 (local), …Z or +09:00, 14d / 6h ago; --until is not included.
 search, show and timeline also read Codex's logs (--source claude|codex|all: show all, the others
   claude; --codex-root DIR) and cache what they read in ~/.cache/agentlog (safe to delete; --raw: no cache).
@@ -102,7 +102,8 @@ rules: count the prohibitions in the memory files and list them, so that they ca
 
 unused: what is installed beside how often the logs used it in the window, the least used first,
   so that a review can see what could go. It only lists; whether to remove one is yours.
-  Installed, from: ~/.claude.json (mcpServers, those of each project, and the claude.ai
+  Installed ($CLAUDE_CONFIG_DIR in place of ~/.claude, and its .claude.json, when it is set),
+  from: ~/.claude.json (mcpServers, those of each project, and the claude.ai
   connectors in claudeAiMcpEverConnected), ~/.claude/settings.json (a plugin set false in
   enabledPlugins is left out), ~/.claude/plugins/installed_plugins.json (in each plugin's folder,
   the servers of .mcp.json or of mcpServers in .claude-plugin/plugin.json, and skills/),
@@ -129,10 +130,12 @@ Codex logs (search, show and timeline; repeats, tool and daily read Claude Code'
   A Codex id is the LAST 8 characters of the session: ids start with a time, so sessions
   of one period share their first characters. show takes any part of an id (several fit:
   they are listed, exit 2). Roots: every --codex-root DIR, else those of ~/.codex/sessions
-  and ~/.codex/archived_sessions that exist. For a copy kept elsewhere give both of its
-  directories, e.g. --codex-root /path/to/copy/sessions
-  --codex-root /path/to/copy/archived_sessions. One session
-  found in several places is read once, from the largest file (the first if equal).
+  and ~/.codex/archived_sessions that exist ($CODEX_HOME in place of ~/.codex when it is
+  set). For a copy kept elsewhere give both of its directories, e.g. --codex-root
+  /path/to/copy/sessions --codex-root /path/to/copy/archived_sessions; one that does not
+  exist is named and left out (none of them: exit 3). One session found in several places
+  is read once, from the largest file (the first if equal). With Codex's logs and no
+  Claude Code's (and no --root), show and --source all read Codex's alone.
   Not the user's words in a Codex log: what the app adds to a user message (browser and
   environment context, AGENTS.md, plugin lists, attachment lists, image tags, interrupts,
   subagent notices). Prompts in a subagent's session are task. Reasoning is left out.

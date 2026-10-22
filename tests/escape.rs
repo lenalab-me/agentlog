@@ -61,6 +61,8 @@ fn run(root: &Path, args: &[&str]) -> String {
             "2026-10-20T00:00Z",
         ])
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
         .env("HOME", "/nonexistent-home")
         .output()
         .unwrap();

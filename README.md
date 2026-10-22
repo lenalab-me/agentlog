@@ -6,7 +6,10 @@ Claude Code のセッションログ（`~/.claude/projects/`）と Codex のセ�
 
 Rust 1.88 以上が要る。
 
+読むログの場所は、Claude Code が `~/.claude/projects/`（`CLAUDE_CONFIG_DIR` があれば `$CLAUDE_CONFIG_DIR/projects/`）、Codex が `~/.codex/sessions/` と `~/.codex/archived_sessions/`（`CODEX_HOME` があればその下）。片方しかないマシンでも、ある方だけで動く。別の場所に写したログは `--root` と `--codex-root` で渡す。
+
 ```sh
+git clone https://github.com/lenalab-me/agentlog && cd agentlog
 cargo install --locked --path .
 agentlog repeats --since 2026-10-01                 # 同じ失敗が 2 回以上あった文脈の多い順
 agentlog tool rpatch --since 2026-10-01 -v          # 失敗のあと、次で直したか、別の手段に逃げたか

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::load::{self, Filter};
-use crate::{jsonl, lines, time};
+use crate::{jsonl, lines, places, time};
 
 pub struct UnusedOpts {
     pub home: PathBuf,
@@ -126,7 +126,7 @@ fn plural(n: usize, one: &str) -> String {
 /// `~/.claude.json`: the servers for every project, those of one project, and the claude.ai
 /// connectors this machine has connected to.
 fn claude_json(home: &Path, inst: &mut Installed) {
-    let p = home.join(".claude.json");
+    let p = places::claude_json(home);
     let path = tilde(&p, home);
     let v = match read_json(&p) {
         Ok(v) => v,
@@ -179,7 +179,7 @@ fn claude_json(home: &Path, inst: &mut Installed) {
 
 /// `~/.claude/settings.json`: the plugins turned off there are left out.
 fn settings(home: &Path, inst: &mut Installed) -> BTreeSet<String> {
-    let p = home.join(".claude/settings.json");
+    let p = places::claude_dir(home).join("settings.json");
     let path = tilde(&p, home);
     let v = match read_json(&p) {
         Ok(v) => v,
@@ -269,7 +269,7 @@ fn add_skill(inst: &mut Installed, name: String, folder: String, from: &str) {
 /// `~/.claude/plugins/installed_plugins.json`, and in each plugin's folder its MCP servers
 /// (`.mcp.json`, or `mcpServers` in `.claude-plugin/plugin.json`) and skills.
 fn plugins(home: &Path, off: &BTreeSet<String>, inst: &mut Installed) {
-    let p = home.join(".claude/plugins/installed_plugins.json");
+    let p = places::claude_dir(home).join("plugins/installed_plugins.json");
     let path = tilde(&p, home);
     let v = match read_json(&p) {
         Ok(v) => v,
@@ -352,7 +352,7 @@ fn plugins(home: &Path, off: &BTreeSet<String>, inst: &mut Installed) {
 }
 
 fn user_skills(home: &Path, inst: &mut Installed) {
-    let dir = home.join(".claude/skills");
+    let dir = places::claude_dir(home).join("skills");
     let path = tilde(&dir, home);
     match skills_in(&dir) {
         Ok(list) => {
@@ -500,7 +500,7 @@ fn on_path(name: &str, path: &str) -> bool {
 }
 
 fn cli_tools(home: &Path, path_var: &str, inst: &mut Installed) {
-    let p = home.join(".claude/CLAUDE.md");
+    let p = places::claude_dir(home).join("CLAUDE.md");
     let path = tilde(&p, home);
     let section = match fs::read_to_string(&p) {
         Ok(t) => cli_section(&t),
@@ -873,7 +873,9 @@ mod tests {
                  - Logs with `oo log --source a` (or `b`), `oo show`\n";
         assert_eq!(
             named_commands(s),
-            ["aa", "cc", "ee", "ff", "gg", "hh", "ii", "jj", "ll", "mm", "nn", "oo"]
+            [
+                "aa", "cc", "ee", "ff", "gg", "hh", "ii", "jj", "ll", "mm", "nn", "oo"
+            ]
         );
     }
 

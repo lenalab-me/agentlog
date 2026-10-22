@@ -70,6 +70,8 @@ fn run(root: &Path, args: &[&str]) -> (i32, String, String) {
         .args(args)
         .args(["--root", root.to_str().unwrap()])
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
         // No Codex logs of the real machine: its default places live under HOME.
         .env("HOME", "/nonexistent-home")
         .output()
@@ -1272,6 +1274,8 @@ fn search_reads_codex_only_when_asked_and_show_finds_it_anyway() {
             .args(args)
             .args(["--root", claude.to_str().unwrap()])
             .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
             .env("HOME", &home)
             .output()
             .unwrap();
@@ -1373,6 +1377,8 @@ fn tl(root: &Path, home: &Path, repo: &Path, args: &[&str]) -> (i32, String, Str
         ])
         .args(args)
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
         .env("HOME", home)
         .env("TZ", "UTC")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -2009,6 +2015,8 @@ fn a_local_time_near_a_change_of_daylight_saving_time_is_that_time() {
             .args(["daily", "x=.", "--json", "--since", when])
             .args(["--root", d.path().to_str().unwrap()])
             .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
             .env("HOME", "/nonexistent-home")
             .env("TZ", "America/New_York")
             .output()
@@ -2033,4 +2041,92 @@ fn project_takes_the_name_search_shows_in_every_report() {
         let j = json_of(d.path(), &["daily", "x=.", "--project", name]);
         assert_eq!(j["total"]["x"], n, "{name}");
     }
+}
+
+/// The binary with only these variables for where things are (no --root).
+fn run_env(env: &[(&str, &Path)], args: &[&str]) -> (i32, String, String) {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_agentlog"));
+    c.args(args)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .env("HOME", "/nonexistent-home");
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let o = c.output().unwrap();
+    (
+        o.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn the_logs_are_where_claude_config_dir_and_codex_home_say() {
+    let d = tempfile::tempdir().unwrap();
+    let cfg = d.path().join("claude-config");
+    let p = cfg.join("projects/-p");
+    fs::create_dir_all(&p).unwrap();
+    fs::write(
+        p.join("s1.jsonl"),
+        failed_call("toolu_i", "2026-10-05T01:00:00Z", BOOM, json!({})),
+    )
+    .unwrap();
+    let window = [
+        "--since",
+        "2026-10-01T00:00Z",
+        "--until",
+        "2026-10-20T00:00Z",
+        "--json",
+    ];
+    let mut a = vec!["repeats", "--all"];
+    a.extend(window);
+    let (code, out, err) = run_env(&[("CLAUDE_CONFIG_DIR", &cfg)], &a);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(serde_json::from_str::<Value>(&out).unwrap()["calls"], 1);
+
+    let codex = d.path().join("codex-home");
+    write_raw(
+        &cx_file(&codex, CX_DAY, CX_LOCAL, CX1),
+        &[
+            cx_meta(CX1, "2026-10-02T05:00:00.000Z", CX_CWD, ""),
+            cx_msg(
+                1,
+                "2026-10-02T05:00:05.000Z",
+                "user",
+                &["ZEBRA in codex home"],
+            ),
+        ],
+    );
+    let (code, out, err) = run_env(
+        &[("CODEX_HOME", &codex)],
+        &["search", "ZEBRA", "--source", "codex"],
+    );
+    assert_eq!((code, out.lines().count()), (0, 1), "{err}");
+    // show reads both by default: a machine with Codex's logs only is not an error
+    let (code, out, err) = run_env(&[("CODEX_HOME", &codex)], &["show", "0000c001"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("ZEBRA in codex home"), "{out}");
+    // a copy with one of its two places: the other is named and left out
+    let missing = codex.join("archived_sessions");
+    let sessions = codex.join("sessions");
+    let (code, out, err) = run_env(
+        &[],
+        &[
+            "search",
+            "ZEBRA",
+            "--source",
+            "codex",
+            "--codex-root",
+            sessions.to_str().unwrap(),
+            "--codex-root",
+            missing.to_str().unwrap(),
+        ],
+    );
+    assert_eq!((code, out.lines().count()), (0, 1), "{err}");
+    assert!(
+        err.contains("archived_sessions: no such directory"),
+        "{err}"
+    );
 }

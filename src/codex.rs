@@ -22,6 +22,7 @@ use crate::jsonl;
 use crate::lines;
 use crate::load::{self, Filter};
 use crate::needle::Prefilter;
+use crate::places;
 use crate::talk::{self, Event, Session, Source, Who};
 use crate::time;
 
@@ -29,11 +30,13 @@ use crate::time;
 /// machine that wrote the log), plus an hour of slack.
 const NAME_SLACK: i64 = 15 * 3600;
 
+/// `sessions` and `archived_sessions` of `~/.codex` (or `$CODEX_HOME`).
 pub fn default_roots() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
+    let dir = places::codex_dir(Path::new(&home));
     ["sessions", "archived_sessions"]
         .iter()
-        .map(|d| PathBuf::from(format!("{home}/.codex/{d}")))
+        .map(|d| dir.join(d))
         .collect()
 }
 

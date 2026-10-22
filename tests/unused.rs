@@ -180,6 +180,8 @@ fn agentlog(w: &World, args: &[&str]) -> (i32, String, String) {
         .args(args)
         .args(["--root", w.home.join(".claude/projects").to_str().unwrap()])
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
         .env("HOME", &w.home)
         .env("PATH", &w.bin)
         .env("TZ", "UTC")
@@ -460,4 +462,30 @@ fn project_keeps_the_sessions_of_that_project() {
     let (_, out, _) = agentlog(&w, &a);
     let none: Value = serde_json::from_str(&out).unwrap();
     assert!(rows(&none).iter().all(|r| r.2 == 0), "{none:#}");
+}
+
+#[test]
+fn claude_config_dir_is_where_the_settings_are() {
+    let w = world();
+    let normal = rows(&report(&w));
+    // the same settings under CLAUDE_CONFIG_DIR, its .claude.json inside it, and a HOME
+    // with nothing in it
+    let cfg = w.home.join(".claude");
+    fs::rename(w.home.join(".claude.json"), cfg.join(".claude.json")).unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let mut a = vec!["unused", "--json"];
+    a.extend(WINDOW);
+    let o = Command::new(env!("CARGO_BIN_EXE_agentlog"))
+        .args(&a)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CODEX_HOME")
+        .env("CLAUDE_CONFIG_DIR", &cfg)
+        .env("HOME", empty.path())
+        .env("PATH", &w.bin)
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(rows(&v), normal);
 }

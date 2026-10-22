@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::cli::SourceSel;
 use crate::memory::{Doc, Scope, Zone, collect, folder_name, instruction_file};
+use crate::places;
 use crate::talk::Source;
 
 /// The lines that count as a prohibition. Loose on purpose: a line that only mentions one
@@ -144,13 +145,17 @@ fn documents(o: &RulesOpts) -> Result<Vec<Entry>, String> {
         }
         if sc.source.claude() {
             files.push((
-                home.join(".claude/CLAUDE.md"),
+                places::claude_dir(home).join("CLAUDE.md"),
                 Source::Claude,
                 Place::Global,
             ));
         }
         if sc.source.codex() {
-            files.push((home.join(".codex/AGENTS.md"), Source::Codex, Place::Global));
+            files.push((
+                places::codex_dir(home).join("AGENTS.md"),
+                Source::Codex,
+                Place::Global,
+            ));
         }
         files.push((real.join("AGENTS.md"), Source::Claude, Place::Repo));
         files.push((real.join("CLAUDE.md"), Source::Claude, Place::Repo));
@@ -158,7 +163,11 @@ fn documents(o: &RulesOpts) -> Result<Vec<Entry>, String> {
         folders.push(folder_name(&repo.to_string_lossy()));
         scope.folders = Some(folders);
     } else if sc.source.codex() {
-        files.push((home.join(".codex/AGENTS.md"), Source::Codex, Place::Global));
+        files.push((
+            places::codex_dir(home).join("AGENTS.md"),
+            Source::Codex,
+            Place::Global,
+        ));
     }
     for (p, s, place) in files {
         docs.extend(instruction_file(&p, s, &o.home).map(|d| (d, place)));

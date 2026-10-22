@@ -117,6 +117,8 @@ fn agentlog(w: &World, args: &[&str]) -> (i32, String, String) {
         .args(args)
         .args(["--root", w.home.join(".claude/projects").to_str().unwrap()])
         .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
         .env("HOME", &w.home)
         .output()
         .unwrap();

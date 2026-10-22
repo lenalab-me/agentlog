@@ -1,7 +1,7 @@
 //! The command line. Options may come anywhere after the subcommand; a bad one is exit 2
 //! with the usage line.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use regex_lite::{Regex, RegexBuilder};
 
@@ -9,6 +9,7 @@ use crate::codex;
 use crate::commands::{DailyOpts, Field, PRESETS, RepeatsOpts, Spec, ToolOpts, preset};
 use crate::memory::{MemoryOpts, Scope};
 use crate::needle::Prefilter;
+use crate::places;
 use crate::recall::{SearchOpts, ShowOpts, WhoFilter};
 use crate::rules::{DEFAULT_PATTERN, RulesOpts};
 use crate::time;
@@ -59,6 +60,8 @@ pub struct Common {
     /// Where Codex's logs are. Unless given, the default places that exist.
     pub codex_roots: Vec<PathBuf>,
     pub codex_roots_given: bool,
+    /// `--root` was given: its absence is an error even beside Codex's logs.
+    pub root_given: bool,
     /// `--raw`: read the logs themselves, not the cache.
     pub raw: bool,
 }
@@ -108,11 +111,12 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         until: i64::MAX,
         projects: Vec::new(),
         excludes: Vec::new(),
-        root: PathBuf::from(format!("{home}/.claude/projects")),
+        root: places::claude_dir(Path::new(&home)).join("projects"),
         json: false,
         source: SourceSel::All,
         codex_roots: Vec::new(),
         codex_roots_given: false,
+        root_given: false,
         raw: false,
     };
     let mut source_given = false;
@@ -191,7 +195,10 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--exclude" => common.excludes.push(value(&mut it)?),
             "--include-self" => include_self = true,
             "--raw" => common.raw = true,
-            "--root" => common.root = PathBuf::from(value(&mut it)?),
+            "--root" => {
+                common.root = PathBuf::from(value(&mut it)?);
+                common.root_given = true;
+            }
             "--codex-root" => {
                 common.codex_roots.push(PathBuf::from(value(&mut it)?));
                 common.codex_roots_given = true;
@@ -336,7 +343,9 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         return Err(if on_memories {
             format!("{sub} reads the memory files, not the logs; --raw does not apply")
         } else {
-            format!("--raw is for search, show and timeline; {sub} always reads the logs themselves")
+            format!(
+                "--raw is for search, show and timeline; {sub} always reads the logs themselves"
+            )
         });
     }
     if repo.is_some() && sub != "timeline" && sub != "rules" {
@@ -357,6 +366,19 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             .into_iter()
             .filter(|p| p.is_dir())
             .collect();
+    } else if common.codex_roots.iter().any(|p| p.is_dir()) {
+        // A copy kept elsewhere may have one of the two places only; none at all is an
+        // error when it is read (exit 3).
+        common.codex_roots.retain(|p| {
+            let there = p.is_dir();
+            if !there {
+                eprintln!(
+                    "agentlog: --codex-root {}: no such directory, left out",
+                    p.display()
+                );
+            }
+            there
+        });
     }
 
     let rest = &pos[1..];
@@ -509,7 +531,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             let scope = Scope {
                 root: common.root.clone(),
                 codex_memories: codex_memories
-                    .unwrap_or_else(|| PathBuf::from(format!("{home}/.codex/memories"))),
+                    .unwrap_or_else(|| places::codex_dir(Path::new(&home)).join("memories")),
                 source: common.source,
                 projects: common.projects.clone(),
                 excludes: common.excludes.clone(),
@@ -530,7 +552,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
             let scope = Scope {
                 root: common.root.clone(),
                 codex_memories: codex_memories
-                    .unwrap_or_else(|| PathBuf::from(format!("{home}/.codex/memories"))),
+                    .unwrap_or_else(|| places::codex_dir(Path::new(&home)).join("memories")),
                 source: common.source,
                 projects: common.projects.clone(),
                 excludes: common.excludes.clone(),

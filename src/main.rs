@@ -11,6 +11,7 @@ mod lines;
 mod load;
 mod memory;
 mod needle;
+mod places;
 mod recall;
 mod rules;
 mod sig;
@@ -112,14 +113,27 @@ fn codex_roots(c: &cli::Common) -> Option<&[std::path::PathBuf]> {
     }
     if c.codex_roots.is_empty() {
         if c.source == cli::SourceSel::Codex {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let place = places::codex_dir(std::path::Path::new(&home)).join("sessions");
             eprintln!(
-                "agentlog: no Codex logs: ~/.codex/sessions does not exist (--codex-root DIR names where they are)"
+                "agentlog: no Codex logs: {} does not exist (--codex-root DIR names where they are)",
+                place.display()
             );
             std::process::exit(3);
         }
         return None;
     }
     Some(&c.codex_roots)
+}
+
+/// Whether to read Claude Code's logs. Beside Codex's (`--source all`), a machine without
+/// them is not an error, unless `--root` named the place.
+fn claude_on(c: &cli::Common) -> bool {
+    c.source.claude()
+        && (c.source == cli::SourceSel::Claude
+            || c.root_given
+            || c.root.is_dir()
+            || c.codex_roots.is_empty())
 }
 
 /// The sessions to search, from the logs `--source` picks. `pre` turns away Codex messages
@@ -132,7 +146,7 @@ fn conversation(
 ) -> Vec<talk::Session> {
     let cache = cache_of(c);
     let mut sessions = Vec::new();
-    if c.source.claude() {
+    if claude_on(c) {
         sessions.extend(
             talk::load_sessions(&c.root, filter, need, pre, &cache)
                 .unwrap_or_else(|e| unreadable(c.root.display(), e)),
@@ -265,7 +279,7 @@ fn timeline(c: &cli::Common, filter: &load::Filter, o: &timeline::TimelineOpts) 
 fn show(c: &cli::Common, filter: &load::Filter, spec: &str, o: &recall::ShowOpts) {
     let cache = cache_of(c);
     let mut sessions: Vec<talk::Session> = Vec::new();
-    if c.source.claude() {
+    if claude_on(c) {
         let files = talk::session_files(&c.root, filter, spec)
             .unwrap_or_else(|e| unreadable(c.root.display(), e));
         sessions.extend(
