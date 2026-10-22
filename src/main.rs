@@ -6,6 +6,7 @@ mod cli;
 mod codex;
 mod commands;
 mod help;
+mod jsonl;
 mod lines;
 mod load;
 mod memory;

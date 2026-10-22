@@ -13,9 +13,11 @@ const NOT_FOUND: &str = "Exit code 1\nerror: edits[0] src/a.rs (input line 2): \
 fn session(path: &Path, calls: &[(&str, Value, &str, bool)]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut out = String::new();
+    // ids are unique across sessions, as Claude Code's are
+    let name = path.file_stem().unwrap().to_string_lossy();
     for (i, (tool, input, result, failed)) in calls.iter().enumerate() {
         let ts = format!("2026-10-05T01:{i:02}:00Z");
-        let id = format!("toolu_{i}");
+        let id = format!("toolu_{name}_{i}");
         let use_line = json!({
             "type": "assistant", "timestamp": ts,
             "message": {"content": [{"type": "tool_use", "id": id, "name": tool, "input": input}]}

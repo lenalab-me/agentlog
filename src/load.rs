@@ -1,22 +1,26 @@
 //! Reads Claude Code session logs (`~/.claude/projects/<project>/<session>.jsonl`, and the
 //! subagents under `<session>/subagents/`) into tool calls. Each file is one context: a
-//! subagent starts with an empty context, so it is counted apart from its parent.
+//! subagent starts with an empty context, so it is counted apart from its parent. A
+//! subagent whose lines sit in its parent's file (`isSidechain`, with its `agentId`) is a
+//! context of its own too. A session that starts with a copy of another's history (the same
+//! tool_use ids and times) does not count those calls again.
 //!
 //! The window is applied to each call's own timestamp. A file's mtime only rules files out
 //! (a file last written before the window has no call in it); resuming an old session
 //! rewrites the file, so mtime alone would let months-old calls in.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{self, BufRead, BufReader};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
+use memchr::memmem;
 use serde_json::Value;
 
-use crate::time;
+use crate::{jsonl, lines, time};
 
 /// Longest command or result kept per call. Enough for signatures and examples.
 const KEEP: usize = 4000;
@@ -154,60 +158,112 @@ fn is_failure(is_error: bool, text: &str) -> bool {
     first.starts_with("Exit code ") && first != "Exit code 0"
 }
 
-fn read_file(path: &Path, f: &Filter) -> io::Result<Vec<Call>> {
-    let reader = BufReader::new(fs::File::open(path)?);
-    let mut calls: Vec<Call> = Vec::new();
-    let mut by_id: HashMap<String, usize> = HashMap::new();
-    for line in reader.lines() {
-        let line = line?;
-        // Cheap skip for lines that cannot hold a tool call or result.
-        if !line.contains("\"tool_use") && !line.contains("\"tool_result") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let Some(content) = v.pointer("/message/content").and_then(Value::as_array) else {
-            continue;
-        };
-        let ts = v
-            .get("timestamp")
+/// A call as read from a file, before it is given a context.
+struct Read {
+    /// The subagent whose lines these are, when they sit in the parent's file
+    /// (isSidechain set, with an agentId).
+    agent: Option<String>,
+    /// The tool_use id: a session that carries a copy of another's history has the same.
+    id: Option<String>,
+    call: Call,
+}
+
+/// The id of the subagent a line is from, when a subagent's lines sit in its parent's file.
+/// A subagent's own file is one context already.
+fn sidechain(v: &Value) -> Option<String> {
+    if !v
+        .get("isSidechain")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some(
+        v.get("agentId")
             .and_then(Value::as_str)
-            .and_then(time::parse_iso);
-        for b in content {
-            match b.get("type").and_then(Value::as_str) {
-                Some("tool_use") => {
-                    let Some(ts) = ts else { continue };
-                    if ts < f.since || ts >= f.until {
-                        continue;
-                    }
-                    let tool = b.get("name").and_then(Value::as_str).unwrap_or("?");
-                    let input = summarize(tool, b.get("input").unwrap_or(&Value::Null));
-                    if let Some(id) = b.get("id").and_then(Value::as_str) {
-                        by_id.insert(id.to_string(), calls.len());
-                    }
-                    calls.push(Call {
+            .unwrap_or("sidechain")
+            .to_string(),
+    )
+}
+
+/// The calls of one log file. A line that is not JSON is passed over, and so is a last line
+/// with no newline (still being written), as `search` does.
+fn read_file(path: &Path, f: &Filter) -> io::Result<Vec<Read>> {
+    let agent_file = path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with("agent-"));
+    let mut calls: Vec<Read> = Vec::new();
+    let mut by_id: HashMap<String, usize> = HashMap::new();
+    lines::scan_from(
+        path,
+        0,
+        |_, _| true,
+        |_, line| {
+            // Cheap skip for lines that cannot hold a tool call or result.
+            if memmem::find(line, b"\"tool_use").is_none()
+                && memmem::find(line, b"\"tool_result").is_none()
+            {
+                return;
+            }
+            let Some(v) = jsonl::parse(line) else { return };
+            read_line(&v, f, agent_file, &mut calls, &mut by_id);
+        },
+    )?;
+    Ok(calls)
+}
+
+fn read_line(
+    v: &Value,
+    f: &Filter,
+    agent_file: bool,
+    calls: &mut Vec<Read>,
+    by_id: &mut HashMap<String, usize>,
+) {
+    let Some(content) = v.pointer("/message/content").and_then(Value::as_array) else {
+        return;
+    };
+    let ts = v
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(time::parse_iso);
+    let agent = if agent_file { None } else { sidechain(v) };
+    for b in content {
+        match b.get("type").and_then(Value::as_str) {
+            Some("tool_use") => {
+                let Some(ts) = ts else { continue };
+                if ts < f.since || ts >= f.until {
+                    continue;
+                }
+                let tool = b.get("name").and_then(Value::as_str).unwrap_or("?");
+                let input = summarize(tool, b.get("input").unwrap_or(&Value::Null));
+                let id = b.get("id").and_then(Value::as_str).map(str::to_string);
+                if let Some(id) = &id {
+                    by_id.insert(id.clone(), calls.len());
+                }
+                calls.push(Read {
+                    agent: agent.clone(),
+                    id,
+                    call: Call {
                         ctx: 0,
                         ts,
                         tool: tool.to_string(),
                         input,
                         failed: false,
                         result: String::new(),
-                    });
-                }
-                Some("tool_result") => {
-                    let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
-                    let Some(&i) = by_id.get(id) else { continue };
-                    let text = text_of(b.get("content").unwrap_or(&Value::Null));
-                    let is_error = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-                    calls[i].failed = is_failure(is_error, &text);
-                    calls[i].result = clip(&text);
-                }
-                _ => {}
+                    },
+                });
             }
+            Some("tool_result") => {
+                let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+                let Some(&i) = by_id.get(id) else { continue };
+                let text = text_of(b.get("content").unwrap_or(&Value::Null));
+                let is_error = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                calls[i].call.failed = is_failure(is_error, &text);
+                calls[i].call.result = clip(&text);
+            }
+            _ => {}
         }
     }
-    Ok(calls)
 }
 
 /// Every log file under the root, in path order.
@@ -282,21 +338,52 @@ pub fn read_all<T: Send>(
 
 pub fn load(root: &Path, f: &Filter) -> io::Result<Log> {
     let files = select_files(root, f)?;
-    // An unreadable or half-written file is skipped, not fatal.
+    // An unreadable file is skipped, not fatal.
     let results = read_all(&files, |p| read_file(p, f).ok().filter(|c| !c.is_empty()));
     let mut log = Log {
         ctxs: Vec::new(),
         calls: Vec::new(),
     };
-    for (i, calls) in results {
-        let ctx = log.ctxs.len();
-        log.ctxs.push(Ctx {
-            label: label(root, &files[i]),
-        });
-        log.calls.extend(calls.into_iter().map(|mut c| {
-            c.ctx = ctx;
-            c
-        }));
+    // A session can start with a copy of another's history (the same tool_use ids and
+    // times): each call is counted once, in the first file that has it.
+    let mut seen: HashSet<String> = HashSet::new();
+    for (i, reads) in results {
+        let file_label = label(root, &files[i]);
+        // The file's own calls first, then each subagent whose lines sit in it.
+        let mut ctx_of: Vec<(Option<String>, usize)> = Vec::new();
+        let mut grouped: Vec<Vec<Call>> = Vec::new();
+        for r in reads {
+            if let Some(id) = r.id
+                && !seen.insert(id)
+            {
+                continue;
+            }
+            let k = match ctx_of.iter().position(|(a, _)| *a == r.agent) {
+                Some(k) => k,
+                None => {
+                    ctx_of.push((r.agent.clone(), grouped.len()));
+                    grouped.push(Vec::new());
+                    grouped.len() - 1
+                }
+            };
+            grouped[k].push(r.call);
+        }
+        let mut order: Vec<usize> = (0..ctx_of.len()).collect();
+        order.sort_by_key(|&k| ctx_of[k].0.is_some());
+        for k in order {
+            let ctx = log.ctxs.len();
+            log.ctxs.push(Ctx {
+                label: match &ctx_of[k].0 {
+                    None => file_label.clone(),
+                    Some(a) => format!("{file_label}/agent-{a}"),
+                },
+            });
+            log.calls
+                .extend(std::mem::take(&mut grouped[k]).into_iter().map(|mut c| {
+                    c.ctx = ctx;
+                    c
+                }));
+        }
     }
     Ok(log)
 }

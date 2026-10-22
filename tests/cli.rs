@@ -44,8 +44,14 @@ fn tool(
 fn write_log(path: &Path, evs: &[Ev]) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut out = String::new();
+    // Ids are unique across sessions, as Claude Code's are (a copied history shares them).
+    let file: String = path
+        .to_string_lossy()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
     for (i, e) in evs.iter().enumerate() {
-        let id = format!("toolu_{i}");
+        let id = format!("toolu_{file}_{i}");
         let use_line = json!({
             "type": "assistant", "timestamp": e.ts,
             "message": {"content": [{"type": "tool_use", "id": id, "name": e.tool, "input": e.input}]}
@@ -1777,4 +1783,104 @@ fn every_section_of_help_txt_is_asked_for_by_some_name() {
             "no name of `agentlog help` prints the section `{h}`"
         );
     }
+}
+
+/// A tool call and its failed result, as two lines; `extra` is merged into both.
+fn failed_call(id: &str, ts: &str, result: &str, extra: Value) -> String {
+    let mut use_line = json!({
+        "type": "assistant", "timestamp": ts,
+        "message": {"content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {"command": "cargo build"}}]}
+    });
+    let mut result_line = json!({
+        "type": "user", "timestamp": ts,
+        "message": {"content": [{"type": "tool_result", "tool_use_id": id, "content": result, "is_error": true}]}
+    });
+    for line in [&mut use_line, &mut result_line] {
+        for (k, v) in extra.as_object().unwrap() {
+            line[k] = v.clone();
+        }
+    }
+    format!("{use_line}\n{result_line}\n")
+}
+
+const BOOM: &str = "Exit code 101\nerror: boom";
+
+#[test]
+fn a_copied_history_is_counted_once() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("-p-copy");
+    let first = failed_call("toolu_a", "2026-10-05T01:00:00Z", BOOM, json!({}));
+    fs::create_dir_all(&p).unwrap();
+    fs::write(p.join("s1.jsonl"), &first).unwrap();
+    // A later session that starts with a copy of s1's history, then fails again itself.
+    let own = failed_call("toolu_b", "2026-10-05T02:00:00Z", BOOM, json!({}));
+    fs::write(p.join("s2.jsonl"), format!("{first}{own}")).unwrap();
+    let j = json_of(d.path(), &["repeats", "--all"]);
+    assert_eq!(j["calls"], 2);
+    let s = &j["signatures"][0];
+    assert_eq!(
+        (s["total"].clone(), s["ctx"].clone(), s["rep"].clone()),
+        (json!(2), json!(2), json!(0))
+    );
+}
+
+#[test]
+fn a_result_cut_inside_an_emoji_still_counts_as_a_failure() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("-p-emoji");
+    fs::create_dir_all(&p).unwrap();
+    // JSON.stringify writes half of a surrogate pair as `\ud83d`; serde_json refuses it.
+    let cut = failed_call(
+        "toolu_c",
+        "2026-10-05T01:00:00Z",
+        "Exit code 101\nerror: boom CUT",
+        json!({}),
+    )
+    .replace("CUT", "\\ud83d");
+    let whole = failed_call("toolu_d", "2026-10-05T01:01:00Z", BOOM, json!({}));
+    fs::write(p.join("s1.jsonl"), format!("{cut}{whole}")).unwrap();
+    let j = json_of(d.path(), &["daily", "x=cargo", "--failed"]);
+    assert_eq!(j["total"]["x"], 2);
+}
+
+#[test]
+fn a_last_line_cut_inside_a_character_leaves_the_rest_of_the_file() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("-p-cut");
+    fs::create_dir_all(&p).unwrap();
+    let mut bytes = failed_call("toolu_e", "2026-10-05T01:00:00Z", BOOM, json!({})).into_bytes();
+    // the line being written stops after two of the three bytes of `あ`
+    bytes.extend_from_slice(
+        b"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"\xe3\x81",
+    );
+    fs::write(p.join("s1.jsonl"), bytes).unwrap();
+    let j = json_of(d.path(), &["repeats", "--all"]);
+    assert_eq!(j["calls"], 1);
+    assert_eq!(j["signatures"][0]["total"], 1);
+}
+
+#[test]
+fn a_subagent_inside_its_parents_file_is_its_own_context() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("-p-side");
+    fs::create_dir_all(&p).unwrap();
+    let parent = failed_call("toolu_f", "2026-10-05T01:00:00Z", BOOM, json!({}));
+    let mut side = json!({ "agentId": "a1b2c3" });
+    side["isSidechain"] = json!(true);
+    let sub = failed_call("toolu_g", "2026-10-05T01:01:00Z", BOOM, side);
+    fs::write(p.join("s1.jsonl"), format!("{parent}{sub}")).unwrap();
+    let j = json_of(d.path(), &["repeats", "--all", "--examples", "5"]);
+    assert_eq!(j["contexts"], 2);
+    let s = &j["signatures"][0];
+    assert_eq!((s["ctx"].clone(), s["rep"].clone()), (json!(2), json!(0)));
+    let ctxs: Vec<&str> = s["examples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["context"].as_str().unwrap())
+        .collect();
+    assert!(
+        ctxs.iter().any(|c| c.ends_with("/s1/agent-a1b2c3")),
+        "{ctxs:?}"
+    );
 }
