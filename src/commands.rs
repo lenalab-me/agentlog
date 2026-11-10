@@ -1024,6 +1024,9 @@ pub fn daily(log: &Log, w: &Window, o: &DailyOpts) -> (String, Value) {
         }
         examples.insert(name.clone(), Value::Array(items));
     }
+    if o.examples == 0 && totals.iter().any(|&t| t > 0) {
+        out.push_str("\nthe calls themselves: add -v (the newest 3 of each) or --examples N\n");
+    }
     if o.examples > 0 && totals.iter().any(|&t| t > 0) {
         out.push_str("\nwhat was said around one: agentlog show ID --at 'TIME' (ID: the 8 characters after the project)\n");
     }

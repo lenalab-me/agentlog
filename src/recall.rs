@@ -135,7 +135,11 @@ pub fn search(sessions: &[Session], o: &SearchOpts) -> (String, Vec<Value>, Opti
         }));
     }
     let note = if total == 0 {
-        Some("0 hits".to_string())
+        // Where the search most often fails: the words were a command's or a tool's.
+        Some(
+            "0 hits in what was said. A command that ran, or what a tool printed: agentlog daily x=REGEX -v"
+                .to_string(),
+        )
     } else if skipped > 0 {
         Some(format!(
             "{total} hits; the newest {} are shown ({skipped} older left out). Narrow with --since, --project or --who, or raise --limit.",

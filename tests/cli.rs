@@ -407,6 +407,10 @@ fn daily_lists_the_newest_calls_around_the_match_when_asked() {
     let (code, plain, _) = run(d.path(), &args(&[]));
     assert_eq!(code, 0);
     assert!(!plain.contains("curl"), "{plain}");
+    // The counts alone say how to see the calls; nothing counted, nothing to see.
+    assert!(plain.contains("the calls themselves: add -v"), "{plain}");
+    let (_, none, _) = run(d.path(), &["daily", "x=no-such-thing"]);
+    assert!(!none.contains("add -v"), "{none}");
 
     // The newest two of the three, the older of them first, each around its match.
     let (code, out, err) = run(d.path(), &args(&["--examples", "2"]));
@@ -677,7 +681,10 @@ fn search_keeps_the_newest_past_the_limit_and_says_so() {
     assert_eq!(out.lines().count(), 2);
     assert!(err.contains("3 hits"), "{err}");
     let (code, out, _) = run(d.path(), &["search", "nothing-like-this"]);
-    assert_eq!((code, out.trim()), (0, "0 hits"));
+    // No hit says where else the words may be: search does not read commands or results.
+    assert_eq!(code, 0);
+    assert!(out.starts_with("0 hits in what was said."), "{out}");
+    assert!(out.contains("agentlog daily x=REGEX -v"), "{out}");
 }
 
 #[test]
