@@ -98,7 +98,7 @@ devsrv
 
 1 つの道具について、文脈ごとに呼び出しを 2 種類に分け、ほかは飛ばす。
 
-- **使った**（`Use`）: プリセットか `--uses` の正規表現に Bash のコマンドが当たったもの。`--uses` も プリセットもない名前は、ツール名そのもの（`Edit`、MCP のツール）。**失敗**は、失敗した呼び出しのうち、`--fail` の正規表現に結果が当たったもの。`rpatch … && cargo test` で後ろの `cargo test` が落ちたのは rpatch の失敗ではない。
+- **使った**（`Use`）: プリセットか `--uses` の正規表現に Bash のコマンドが当たったもの。`--uses` も プリセットもない名前は、ツール名そのもの（`Edit`、MCP のツール）。窓の中にその名前のツールの呼び出しが無く、その名前を語として含む Bash のコマンドがあれば、Bash のプログラムとして数え、そのことを出力に書く（JSON は `as_bash_program`。道具を使っているのに「not used」と答えないように）。**失敗**は、失敗した呼び出しのうち、`--fail` の正規表現に結果が当たったもの。`rpatch … && cargo test` で後ろの `cargo test` が落ちたのは rpatch の失敗ではない。
 - **別のやり方**（`Alt`）: `--alt` の正規表現か `--alt-tool` のツール。日ごとに数え、失敗の直後なら「別の手段に逃げた」に数える。`--escape` / `--escape-tool` は、失敗の直後だけ数える（日ごとには数えない）。Write や `cat >` は新しいファイルを作るのに毎日使うが、失敗した直後に同じことをすれば、書き直しへの逃げになるため。`--ignore` に当たるもの（`/tmp` への書き出し）は数えない。
 
 使ったもののうち失敗が続いた連なりを 1 つと数え、その直後の分類で終わり方を決める。
@@ -187,6 +187,7 @@ rpatch（プリセットの `same_file`）は、失敗した呼び出しが編�
 | `[Request interrupted by user…`、`[Image: source:`、`This session is being continued from…`、`Base directory for this skill:`、`<scheduled-task`、`<command-message>` で始まる | ハーネスが書いた文。外す |
 | サブエージェントのファイルの `user` 行（`isSidechain` が真、またはファイル名が `agent-`） | 親が書いた依頼文。人の発言ではないので `who` を `task` にする |
 | T3 Code が人の代わりに送る定型の依頼（`Delegated task`、`Act as the `、`Generate a title `、`You generate concise git branch names`、`Continue where you left off`、`You have N orchestration message`） | これもログ上は打った文と同じ印（`promptSource: sdk`）なので、書き出しの文言で見分けて `task` にする |
+| Ghostex が送るもの（先頭の `<pasted_content …>` を除いて `Ghostex thread report`、`Read and adhere to this skill: /ghostex-`、`<ghostex-questions-resend`、`このセッションは Ghostex の定期実行`、`定期実行「…」の時刻です` で始まる、または本文に `started by a Ghostex coordinator`、`rename-self "<3 to 6 words>"` を含む） | 人の発言ではないので `who` を `task` にする。貼り付けの印は人の貼り付けにも付くので、それだけでは決めない。フォームの回答（`<ghostex-page-answers`）は本人の言葉なので `user` のまま |
 | assistant の `model` が `<synthetic>` | 外す（APIの代わりにハーネスが返した定型文） |
 | `queue-operation`、`attachment`、`system` など、`user`・`assistant` 以外の行 | 見ない |
 

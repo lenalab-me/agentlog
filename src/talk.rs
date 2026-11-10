@@ -28,7 +28,8 @@ use crate::time;
 pub enum Who {
     User,
     Assistant,
-    /// The first prompt of a subagent: the parent wrote it, a person did not.
+    /// The first prompt of a subagent, or a message an app or a coordinating session
+    /// sent: something else wrote it, a person did not.
     Task,
 }
 
@@ -131,9 +132,25 @@ pub fn sent_for_a_task(text: &str) -> bool {
         "Generate a title ",
         "You generate concise git branch names",
         "Continue where you left off",
+        "Ghostex thread report",
+        "Read and adhere to this skill: /ghostex-",
+        "<ghostex-questions-resend",
+        "このセッションは Ghostex の定期実行",
     ];
+    // Ghostex's brief to a thread starts with the task and ends with these.
+    const BRIEF: &[&str] = &[
+        "started by a Ghostex coordinator",
+        "rename-self \"<3 to 6 words>\"",
+    ];
+    // Ghostex sends some of these as a paste, as a person pastes: the tag says nothing by itself.
+    let text = text
+        .strip_prefix("<pasted_content")
+        .and_then(|t| t.split_once('>'))
+        .map_or(text, |(_, t)| t.trim_start());
     STARTS.iter().any(|p| text.starts_with(p))
+        || BRIEF.iter().any(|p| text.contains(p))
         || text.starts_with("You have ") && text.contains("orchestration message")
+        || text.starts_with("定期実行「") && text.contains("」の時刻です")
 }
 
 fn injected_blocks() -> &'static Regex {
@@ -606,6 +623,24 @@ mod tests {
         assert!(sent_for_a_task("You have 2 orchestration messages. Run it"));
         assert!(!sent_for_a_task("Please act as the reviewer"));
         assert!(!sent_for_a_task("You have a point about the design"));
+        assert!(sent_for_a_task("Ghostex thread report: x finished"));
+        assert!(sent_for_a_task(
+            "<pasted_content id=\"ab12\">\nGhostex thread report: x finished\n</pasted_content id=\"ab12\">"
+        ));
+        assert!(sent_for_a_task(
+            "<pasted_content id=\"ab12\">\nFix the bug.\n---\nYou are a thread started by a Ghostex coordinator."
+        ));
+        assert!(sent_for_a_task(
+            "Fix it. Name yourself first: `ghostex coordinator rename-self \"<3 to 6 words>\"`."
+        ));
+        assert!(sent_for_a_task("定期実行「朝刊」の時刻です。読んで従う"));
+        assert!(!sent_for_a_task("定期実行を朝にすればよさそう"));
+        assert!(!sent_for_a_task(
+            "<pasted_content id=\"ab12\">\nなるほど、提案の感じで\n</pasted_content id=\"ab12\">"
+        ));
+        assert!(!sent_for_a_task(
+            "<pasted_content id=\"ab12\">\n<ghostex-page-answers page=\"x\">はい</ghostex-page-answers>"
+        ));
     }
 
     #[test]

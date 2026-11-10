@@ -176,6 +176,7 @@ pub fn repeats(log: &Log, w: &Window, o: &RepeatsOpts) -> (String, Value) {
 // ---------------------------------------------------------------------------------------
 // tool
 
+#[derive(Clone)]
 pub struct Spec {
     pub name: String,
     /// A Bash command that uses the tool. None: calls whose tool name is `name`.
@@ -622,7 +623,30 @@ fn fail_line(spec: &Spec, c: &Call) -> String {
     sig::normalize(line)
 }
 
+/// `tool NAME` with no --uses, no call of a tool of that name and Bash commands that run it:
+/// count those, or a program in use would read as not used.
+fn as_bash_program(log: &Log, spec: &Spec) -> Option<Spec> {
+    if spec.uses.is_some() || log.calls.iter().any(|c| c.tool == spec.name) {
+        return None;
+    }
+    let uses = Regex::new(&format!(
+        r"(^|[\s;&|(]){}(\s|$)",
+        regex_lite::escape(&spec.name)
+    ))
+    .ok()?;
+    let used = log
+        .calls
+        .iter()
+        .any(|c| c.tool == "Bash" && uses.is_match(&c.input));
+    used.then(|| Spec {
+        uses: Some(uses),
+        ..spec.clone()
+    })
+}
+
 pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value) {
+    let program = as_bash_program(log, spec);
+    let spec = program.as_ref().unwrap_or(spec);
     #[derive(Default)]
     struct Day {
         uses: usize,
@@ -758,6 +782,12 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
 
     let mut out = header(log, w);
     let _ = writeln!(out, "\n{}", spec.name);
+    if program.is_some() {
+        let _ = writeln!(
+            out,
+            "  no tool of this name: counted as a Bash program, every command with it as a word (--uses to narrow)"
+        );
+    }
     match first_use {
         Some(t) => {
             let _ = writeln!(out, "  first use in the window: {}", time::minute(t));
@@ -859,6 +889,7 @@ pub fn tool(log: &Log, w: &Window, spec: &Spec, o: &ToolOpts) -> (String, Value)
 
     let j = json!({
         "tool": spec.name,
+        "as_bash_program": program.is_some(),
         "since": time::minute(w.since), "until": time::minute(until),
         "first_use": first_use.map(time::minute),
         "uses": uses, "failed": failed,

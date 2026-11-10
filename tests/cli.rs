@@ -635,6 +635,36 @@ fn a_subagent_is_marked_and_its_prompt_is_not_the_users() {
     assert_eq!(hits(d.path(), &["beacon", "--who", "user"]).len(), 1);
 }
 
+#[test]
+fn what_a_coordinator_or_a_schedule_sent_is_not_the_users() {
+    let d = tempfile::tempdir().unwrap();
+    let paste =
+        |text: &str| format!("<pasted_content id=\"ab12\">\n{text}\n</pasted_content id=\"ab12\">");
+    let sent = [
+        paste("Ghostex thread report: beacon finished"),
+        paste("beacon を直す。\n---\nYou are a thread started by a Ghostex coordinator."),
+        "定期実行「beacon」の時刻です。読んで従う".to_string(),
+    ];
+    let mine = [
+        "beacon を定期実行にしたい".to_string(),
+        paste("beacon のログを貼ります"),
+        paste("<ghostex-page-answers page=\"x\">beacon はい</ghostex-page-answers>"),
+    ];
+    let lines: Vec<Value> = sent
+        .iter()
+        .chain(&mine)
+        .enumerate()
+        .map(|(i, text)| user(S1, &format!("2026-10-02T05:0{i}:00Z"), text))
+        .collect();
+    write_lines(&d.path().join("-p-net").join(format!("{S1}.jsonl")), &lines);
+    let who: Vec<String> = hits(d.path(), &["beacon"])
+        .iter()
+        .map(|h| h["who"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(who, ["task", "task", "task", "user", "user", "user"]);
+    assert_eq!(hits(d.path(), &["beacon", "--who", "user"]).len(), 3);
+}
+
 fn long_talk(root: &Path) {
     let mut lines = Vec::new();
     for i in 0..9 {

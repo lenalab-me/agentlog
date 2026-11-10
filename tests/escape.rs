@@ -71,6 +71,43 @@ fn run(root: &Path, args: &[&str]) -> String {
 }
 
 #[test]
+fn a_name_with_no_such_tool_is_counted_as_a_bash_program() {
+    let d = tempfile::tempdir().unwrap();
+    session(
+        &d.path().join("-p/s.jsonl"),
+        &[
+            ("Bash", bash("mytool run"), "", false),
+            ("Bash", bash("cd x && mytool run"), "Exit code 1", true),
+            ("Bash", bash("mytools run"), "", false),
+            ("Edit", file("a.rs"), "", false),
+        ],
+    );
+    const NOTE: &str = "counted as a Bash program";
+
+    let program = run(d.path(), &["tool", "mytool"]);
+    assert!(program.contains("uses: 2, failed: 1"), "{program}");
+    assert!(program.contains(NOTE), "{program}");
+    let json = run(d.path(), &["tool", "mytool", "--json"]);
+    let json: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(json["as_bash_program"], json!(true));
+
+    // A tool of that name in the window: its calls, as before.
+    let named = run(d.path(), &["tool", "Edit"]);
+    assert!(named.contains("uses: 1, failed: 0"), "{named}");
+    assert!(!named.contains(NOTE), "{named}");
+
+    // Used nowhere: still not used.
+    let nowhere = run(d.path(), &["tool", "nothing"]);
+    assert!(nowhere.contains("not used in the window"), "{nowhere}");
+    assert!(!nowhere.contains(NOTE), "{nowhere}");
+
+    // --uses says what counts.
+    let chosen = run(d.path(), &["tool", "mytool", "--uses", "mytools"]);
+    assert!(chosen.contains("uses: 1, failed: 0"), "{chosen}");
+    assert!(!chosen.contains(NOTE), "{chosen}");
+}
+
+#[test]
 fn an_escape_is_another_way_on_the_file_that_failed() {
     let d = tempfile::tempdir().unwrap();
     let r = d.path();

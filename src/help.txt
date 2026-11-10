@@ -37,8 +37,8 @@ Exit status: 0 ok (also with 0 hits); 2 invalid input, SESSION not found or not 
 not a git repository (rules: not a directory); 3 the log or memory directory cannot be read.
 
 search: one line per utterance that matches (the first match in it): local time, who
-  (user, assistant, or task = a prompt the parent gave a subagent), source (claude or
-  codex), id, project, and about 40 characters either side. Oldest first; past --limit
+  (user, assistant, or task = written by a subagent's parent, an app or a coordinator),
+  source (claude or codex), id, project, and about 40 characters either side. Oldest first; past --limit
   the newest are kept and the count is printed. Only typed words and the assistant's text
   are searched: not tool inputs, tool results, thinking, system reminders or other text
   the harness adds. id is 8 characters of the session, or SESSION/AGENT for a Claude
@@ -181,7 +181,8 @@ What it counts (repeats, tool, daily):
   Presets: rpatch (other ways: Edit, MultiEdit, python replace, sd, sed -i, perl -i; right after a
   failure also Write, cat >, >|) and devsrv (other ways: lsof -i, pkill, nohup, kill,
   `server &`, until-curl loops). Any other NAME is a tool name (Edit, an MCP tool), or
-  a Bash program with --uses; the options below replace the preset's.
+  with no call of such a tool, a Bash program (the output says so); --uses says which commands
+  count. The options below replace the preset's.
   --fail RE: the tool itself failed (the result matches), not a command after it.
   --alt RE / --alt-tool: another way, counted per day and as going another way.
   --escape RE / --escape-tool: counted only as going another way right after a

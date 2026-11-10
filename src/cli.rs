@@ -441,7 +441,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
         "tool" => {
             let [name] = rest else {
                 return Err(format!(
-                    "tool takes one NAME (a preset: {}, or a tool name, or any name with --uses)\n{USAGE}",
+                    "tool takes one NAME (a preset: {}, or a tool name, or a Bash program)\n{USAGE}",
                     PRESETS.join(", ")
                 ));
             };
