@@ -4,7 +4,7 @@ Usage:
   agentlog repeats [--tool T] [--top 30] [--all] [-v | --examples N]
   agentlog tool NAME [--uses RE] [--fail RE] [--alt RE] [--alt-tool T,T]
                      [--escape RE] [--escape-tool T,T] [--ignore RE] [-v]
-  agentlog daily NAME=REGEX... [--in input|result|any] [--tool T] [--failed]
+  agentlog daily NAME=REGEX... [--in input|result|any] [--tool T] [--failed] [-v]
   agentlog search REGEX [-i] [--who user|assistant|any] [--limit 50] [--source S]
   agentlog show SESSION [--grep RE | --at TIME] [--around 5] [--full] [-i] [--source S]
   agentlog timeline --repo DIR [--who user|any] [--source S]
@@ -45,6 +45,8 @@ search: one line per utterance that matches (the first match in it): local time,
   subagent. Project is the session's first working directory, without the home directory
   (this machine's, or one under /Users or /home) and a leading project/prod/ or project/ (the
   author's layout; other paths are shown as they are). -i ignores case.
+  What a tool was given or answered (a command that was run, an error it printed):
+  agentlog daily NAME=REGEX -v lists those calls.
 
 show: SESSION is an id or its first characters (several fit: they are listed, exit 2).
   It prints the utterances in order, tool calls as `[Bash] first line…`. --grep RE (first
@@ -201,4 +203,9 @@ What it counts (repeats, tool, daily):
   compare files.
 
   daily: calls per local day whose input (the Bash command, the file path, or the tool
-  input) or result matches each REGEX.
+  input) or result matches each REGEX. -v (3) or --examples N also lists the newest N
+  calls of each NAME, oldest first: local time, context (project/ID, or
+  project/ID/AGENT for a subagent), the tool, and about 40 characters either side of the
+  match (`=>` before a match in the result). It is the search for what tools were given
+  and answered: no jq over the log files is needed. agentlog show ID --at 'TIME' reads
+  what was said around one. --json has the whole input of each listed call.

@@ -364,6 +364,84 @@ fn daily_counts_per_local_day() {
     assert_eq!(j["days"].as_array().unwrap().len(), 2);
     let j = json_of(d.path(), &["daily", "poll=until", "--in", "result"]);
     assert_eq!(j["total"], json!({"poll": 0}));
+    // Without -v the commands themselves are not printed.
+    assert_eq!(j["examples"], json!({"poll": []}));
+}
+
+#[test]
+fn daily_lists_the_newest_calls_around_the_match_when_asked() {
+    let d = tempfile::tempdir().unwrap();
+    let long = format!(
+        "echo {}; until curl -s second; do sleep 1; done",
+        "x".repeat(200)
+    );
+    write_log(
+        &d.path().join("-p/s1.jsonl"),
+        &[
+            bash(
+                "2026-10-02T01:00:00Z",
+                "until curl -s first; do sleep 1; done",
+                "",
+            ),
+            bash("2026-10-02T02:00:00Z", "cd w && git status", WORKTREE),
+            bash("2026-10-04T01:00:00Z", &long, ""),
+            bash(
+                "2026-10-05T01:00:00Z",
+                "until curl -s third; do sleep 1; done",
+                "",
+            ),
+        ],
+    );
+    let window = [
+        "--since",
+        "2026-10-01T00:00Z",
+        "--until",
+        "2026-10-20T00:00Z",
+    ];
+    let args = |more: &[&'static str]| {
+        let mut a = vec!["daily", "poll=until .*sleep", "wt=isolated in the worktree"];
+        a.extend(more);
+        a.extend(window);
+        a
+    };
+    let (code, plain, _) = run(d.path(), &args(&[]));
+    assert_eq!(code, 0);
+    assert!(!plain.contains("curl"), "{plain}");
+
+    // The newest two of the three, the older of them first, each around its match.
+    let (code, out, err) = run(d.path(), &args(&["--examples", "2"]));
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("poll: the newest 2 of 3"), "{out}");
+    assert!(!out.contains("first"), "{out}");
+    let (second, third) = (
+        out.find("curl -s second").unwrap(),
+        out.find("curl -s third").unwrap(),
+    );
+    assert!(second < third, "{out}");
+    let line = out.lines().find(|l| l.contains("second")).unwrap();
+    assert!(
+        line.contains("/s1  Bash  …") && line.contains("xxxx; until curl -s second; do sleep"),
+        "{line}"
+    );
+    assert!(line.chars().count() < 200, "{line}");
+    // A match in the result is marked, and the way to read around a call is given.
+    let line = out
+        .lines()
+        .find(|l| l.contains("isolated in the worktree"))
+        .unwrap();
+    assert!(line.contains("  Bash =>  "), "{line}");
+    assert!(out.contains("agentlog show ID --at 'TIME'"), "{out}");
+
+    let j = json_of(
+        d.path(),
+        &["daily", "poll=until .*sleep", "wt=worktree", "-v"],
+    );
+    let poll = j["examples"]["poll"].as_array().unwrap();
+    assert_eq!(poll.len(), 3);
+    assert_eq!(poll[1]["input"], json!(long));
+    assert_eq!(poll[1]["in"], "input");
+    assert_eq!(j["examples"]["wt"][0]["in"], "result");
+    assert_eq!(j["examples"]["wt"][0]["tool"], "Bash");
 }
 
 #[test]
@@ -2163,7 +2241,7 @@ fn an_option_of_another_command_is_refused() {
     let d = tempfile::tempdir().unwrap();
     for args in [
         &["repeats", "--who", "user"][..],
-        &["daily", "x=a", "-v"],
+        &["daily", "x=a", "--top", "3"],
         &["tool", "rpatch", "--in", "input"],
         &["search", "x", "--top", "1"],
         &["show", "abc", "--limit", "3"],
@@ -2180,6 +2258,8 @@ fn an_option_of_another_command_is_refused() {
         d.path(),
         &["repeats", "--top", "3", "--all", "-v", "--tool", "Bash"],
     );
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = run(d.path(), &["daily", "x=a", "-v", "--examples", "5"]);
     assert_eq!(code, 0, "{err}");
 }
 

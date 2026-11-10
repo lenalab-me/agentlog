@@ -77,8 +77,8 @@ const USAGE: &str = "usage: agentlog repeats|tool NAME|daily NAME=REGEX...|searc
 const ONLY: &[(&str, &[&str])] = &[
     ("--top", &["repeats"]),
     ("--all", &["repeats"]),
-    ("--examples", &["repeats", "tool"]),
-    ("-v", &["repeats", "tool"]),
+    ("--examples", &["repeats", "tool", "daily"]),
+    ("-v", &["repeats", "tool", "daily"]),
     ("--tool", &["repeats", "daily"]),
     ("--in", &["daily"]),
     ("--failed", &["daily"]),
@@ -495,6 +495,7 @@ pub fn parse(args: Vec<String>) -> Result<Parsed, String> {
                 field,
                 tool: tool_filter,
                 failed_only,
+                examples,
             })
         }
         "search" => {

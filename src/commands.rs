@@ -915,12 +915,29 @@ pub struct DailyOpts {
     pub field: Field,
     pub tool: Option<String>,
     pub failed_only: bool,
+    /// The newest calls to list for each pattern, with the text around the match.
+    pub examples: usize,
+}
+
+/// Where a pattern matched in a call: the input first, then the result.
+fn match_in<'a>(
+    c: &'a Call,
+    r: &Regex,
+    field: Field,
+) -> Option<(&'static str, &'a str, usize, usize)> {
+    let find = |name, text: &'a str| r.find(text).map(|m| (name, text, m.start(), m.end()));
+    match field {
+        Field::Input => find("input", &c.input),
+        Field::Result => find("result", &c.result),
+        Field::Any => find("input", &c.input).or_else(|| find("result", &c.result)),
+    }
 }
 
 pub fn daily(log: &Log, w: &Window, o: &DailyOpts) -> (String, Value) {
     let mut table: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut totals = vec![0usize; o.patterns.len()];
-    for c in &log.calls {
+    let mut hits: Vec<Vec<usize>> = vec![Vec::new(); o.patterns.len()];
+    for (i, c) in log.calls.iter().enumerate() {
         if o.tool.as_deref().is_some_and(|t| t != c.tool) || (o.failed_only && !failed(c)) {
             continue;
         }
@@ -935,6 +952,7 @@ pub fn daily(log: &Log, w: &Window, o: &DailyOpts) -> (String, Value) {
                     .entry(time::day(c.ts))
                     .or_insert_with(|| vec![0; o.patterns.len()])[k] += 1;
                 totals[k] += 1;
+                hits[k].push(i);
             }
         }
     }
@@ -971,8 +989,47 @@ pub fn daily(log: &Log, w: &Window, o: &DailyOpts) -> (String, Value) {
         let _ = write!(out, "  {v:>wd$}", wd = wd);
     }
     out.push('\n');
+    // The calls themselves: the newest, oldest first, as search lists what was said.
+    let mut examples = serde_json::Map::new();
+    for ((name, r), list) in o.patterns.iter().zip(&mut hits) {
+        list.sort_by_key(|&i| log.calls[i].ts);
+        let shown = &list[list.len().saturating_sub(o.examples)..];
+        let mut items = Vec::new();
+        if o.examples > 0 && !list.is_empty() {
+            let _ = writeln!(
+                out,
+                "\n{name}: the newest {} of {}",
+                shown.len(),
+                list.len()
+            );
+        }
+        for &i in shown {
+            let c = &log.calls[i];
+            let Some((field, text, start, end)) = match_in(c, r, o.field) else {
+                continue;
+            };
+            let part = crate::recall::snippet(text, start, end);
+            let _ = writeln!(
+                out,
+                "  {}  {}  {}{}  {part}",
+                time::minute(c.ts),
+                log.ctxs[c.ctx].label,
+                c.tool,
+                if field == "result" { " =>" } else { "" },
+            );
+            items.push(json!({
+                "time": time::minute(c.ts), "context": log.ctxs[c.ctx].label, "tool": c.tool,
+                "in": field, "match": part, "input": c.input,
+            }));
+        }
+        examples.insert(name.clone(), Value::Array(items));
+    }
+    if o.examples > 0 && totals.iter().any(|&t| t > 0) {
+        out.push_str("\nwhat was said around one: agentlog show ID --at 'TIME' (ID: the 8 characters after the project)\n");
+    }
     let j = json!({
         "since": time::minute(w.since), "until": time::minute(w.until.min(time::now())),
+        "examples": examples,
         "patterns": o.patterns.iter().map(|(n, r)| json!({"name": n, "regex": r.as_str()})).collect::<Vec<_>>(),
         "days": table.iter().map(|(d, row)| {
             let mut m = serde_json::Map::new();

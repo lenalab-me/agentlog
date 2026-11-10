@@ -13,6 +13,7 @@ git clone https://github.com/lenalab-me/agentlog && cd agentlog
 cargo install --locked --path .
 agentlog repeats --since 2026-10-01                 # 同じ失敗が 2 回以上あった文脈の多い順
 agentlog tool rpatch --since 2026-10-01 -v          # 失敗のあと、次で直したか、別の手段に逃げたか
+agentlog daily kill='\bpkill\b' --tool Bash -v      # 日ごとの件数と、当たった呼び出しそのもの（コマンドや結果の検索）
 agentlog tool devsrv --since 2026-10-01             # 使い始める前と後の、別のやり方の回数
 agentlog daily wt='isolated in the worktree' poll='until .*sleep' --since 2026-10-01
 agentlog search 'too slow' -i --who user           # 前に何と言ったか（古い順。窓は既定で制限なし）

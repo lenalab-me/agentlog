@@ -43,7 +43,7 @@ pub fn one_line(s: &str) -> String {
 }
 
 /// The match with about `SIDE` characters either side, on one line.
-fn snippet(text: &str, start: usize, end: usize) -> String {
+pub fn snippet(text: &str, start: usize, end: usize) -> String {
     let before = &text[..start];
     let after = &text[end..];
     let b: String = {
